@@ -170,6 +170,8 @@ func friendlyNetErr(err error) error {
 		return fmt.Errorf("Verbindung abgelehnt — API-Server nicht erreichbar")
 	case strings.Contains(msg, "timeout") || strings.Contains(msg, "deadline exceeded"):
 		return fmt.Errorf("Timeout — API-Server antwortet nicht")
+	case strings.Contains(msg, "404"):
+		return fmt.Errorf("404 — API-Endpunkt nicht gefunden. Gemini: Key von aistudio.google.com holen (Google-Login → 'Get API key')")
 	case strings.Contains(msg, "401") || strings.Contains(msg, "Unauthorized"):
 		return fmt.Errorf("API-Key ungültig — Settings (S) öffnen und Key prüfen")
 	case strings.Contains(msg, "403") || strings.Contains(msg, "Forbidden"):

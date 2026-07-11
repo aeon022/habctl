@@ -610,12 +610,22 @@ func (m model) renderKeyInput() string {
 
 	b.WriteString(styleLime.Bold(true).Render(p.label+" einrichten") + "\n\n")
 
-	if p.keyPage != "" {
-		b.WriteString(styleMuted.Render("Schritt 1 — API-Key holen:") + "\n")
-		b.WriteString("  " + styleOk.Render("o") + styleMuted.Render("  öffnet "+p.keyPage) + "\n\n")
-		b.WriteString(styleMuted.Render("Schritt 2 — Key einfügen (Cmd+V):") + "\n")
-	} else {
-		b.WriteString(styleMuted.Render("API-Key eingeben:") + "\n")
+	switch p.id {
+	case ai.ProviderGemini:
+		b.WriteString(styleMuted.Render("Gemini nutzt deinen Google-Account — aber der Login\n"+
+			"läuft über AI Studio, nicht direkt hier.\n\n") +
+			styleOk.Render("o") + styleMuted.Render("  Browser öffnen: aistudio.google.com\n") +
+			styleMuted.Render("   → Mit Google-Account einloggen\n") +
+			styleMuted.Render("   → \"Get API key\" → \"Create API key\"\n") +
+			styleMuted.Render("   → Key kopieren (Cmd+C)\n\n") +
+			styleMuted.Render("API-Key einfügen (Cmd+V):\n"))
+	default:
+		if p.keyPage != "" {
+			b.WriteString(styleOk.Render("o") + styleMuted.Render("  öffnet "+p.keyPage+"\n\n") +
+				styleMuted.Render("API-Key einfügen (Cmd+V):\n"))
+		} else {
+			b.WriteString(styleMuted.Render("API-Key eingeben:\n"))
+		}
 	}
 
 	b.WriteString("  " + m.input.View() + "\n\n")
