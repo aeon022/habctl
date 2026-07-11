@@ -41,6 +41,7 @@ type viewState int
 const (
 	viewList viewState = iota
 	viewAddInput
+	viewHelp
 )
 
 // ── messages ─────────────────────────────────────────────────────────────────
@@ -111,6 +112,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		if m.state == viewHelp {
+			switch msg.String() {
+			case "?", "esc", "q", "ctrl+c":
+				if msg.String() == "ctrl+c" {
+					return m, tea.Quit
+				}
+				m.state = viewList
+			}
+			return m, nil
+		}
 		if m.state == viewAddInput {
 			return m.handleAddInput(msg)
 		}
@@ -167,6 +178,9 @@ func (m model) handleList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return statusMsg(out)
 		}
 
+	case "?":
+		m.state = viewHelp
+
 	case "n":
 		m.state = viewAddInput
 		m.input.Reset()
@@ -217,10 +231,14 @@ func (m model) handleAddInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // ── view ──────────────────────────────────────────────────────────────────────
 
 func (m model) View() string {
-	if m.state == viewAddInput {
+	switch m.state {
+	case viewHelp:
+		return m.renderHelp()
+	case viewAddInput:
 		return m.renderAdd()
+	default:
+		return m.renderList()
 	}
-	return m.renderList()
 }
 
 func (m model) renderList() string {
@@ -283,7 +301,7 @@ func (m model) renderList() string {
 		b.WriteString(msgStyle.Render(m.message) + "\n\n")
 	}
 
-	b.WriteString(styleMuted.Render("space/enter check in · n new · d delete · q quit"))
+	b.WriteString(styleMuted.Render("space/enter check in · n new · d delete · ? help · q quit"))
 	return panelStyle.Render(b.String())
 }
 
@@ -292,6 +310,49 @@ func (m model) renderAdd() string {
 	b.WriteString(styleLime.Bold(true).Render("New habit") + "\n\n")
 	b.WriteString(m.input.View() + "\n\n")
 	b.WriteString(styleMuted.Render("enter save · esc cancel"))
+	return panelStyle.Render(b.String())
+}
+
+func (m model) renderHelp() string {
+	lime := styleLime.Bold(true)
+	key := lipgloss.NewStyle().Foreground(colorLime).Width(18)
+	desc := styleMuted
+
+	row := func(k, d string) string {
+		return "  " + key.Render(k) + desc.Render(d) + "\n"
+	}
+	section := func(title string) string {
+		return "\n  " + lime.Render(title) + "\n"
+	}
+
+	var b strings.Builder
+
+	b.WriteString(lime.Render("habctl") + styleMuted.Render(" — daily habit tracker") + "\n\n")
+	b.WriteString(styleMuted.Render(
+		"  Track habits every day. Build streaks. Miss a day and\n" +
+			"  the streak resets — simple, honest accountability.\n",
+	))
+
+	b.WriteString(section("Navigation"))
+	b.WriteString(row("j / ↓", "move down"))
+	b.WriteString(row("k / ↑", "move up"))
+
+	b.WriteString(section("Actions"))
+	b.WriteString(row("space / enter", "check in today"))
+	b.WriteString(row("n", "add new habit"))
+	b.WriteString(row("d", "delete selected habit"))
+
+	b.WriteString(section("Columns"))
+	b.WriteString(row("today", "✓ = done today  –  = not yet"))
+	b.WriteString(row("streak", "consecutive days ending today"))
+	b.WriteString(row("30-day", "█░ bar = completion rate, last 30 days"))
+
+	b.WriteString(section("Other"))
+	b.WriteString(row("?", "toggle this help screen"))
+	b.WriteString(row("q / ctrl+c", "quit"))
+
+	b.WriteString("\n  " + styleMuted.Render("esc / ?   close help"))
+
 	return panelStyle.Render(b.String())
 }
 
