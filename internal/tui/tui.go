@@ -184,7 +184,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case oauthSuccessMsg:
 		m.cfg.GoogleRefreshToken = msg.refreshToken
 		config.Save(m.cfg)
-		config.ApplyToEnv(m.cfg)
+		config.ForceApplyToEnv(m.cfg)
 		m.state = viewList
 		m.message = "Google-Login erfolgreich — Gemini aktiv"
 		return m, nil
@@ -306,6 +306,7 @@ func (m model) handleList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "S":
 		cfg, _ := config.Load()
 		m.cfg = cfg
+		config.ForceApplyToEnv(cfg) // sync env vars with saved config
 		m.state = viewSettings
 		m.settingsCursor = 0
 
@@ -384,7 +385,7 @@ func (m model) handleSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case ai.ProviderOllama:
 			m.cfg.Provider = string(ai.ProviderOllama)
 			config.Save(m.cfg)
-			config.ApplyToEnv(m.cfg)
+			config.ForceApplyToEnv(m.cfg)
 			m.state = viewList
 			m.message = "Ollama aktiv (lokal)"
 
@@ -491,7 +492,7 @@ func (m model) handleGeminiCS(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.cfg.GoogleClientID = m.geminiClientID
 			m.cfg.GoogleClientSecret = v
 			config.Save(m.cfg)
-			config.ApplyToEnv(m.cfg)
+			config.ForceApplyToEnv(m.cfg)
 			m.state = viewOAuthWait
 			return m, startOAuth(m.cfg.GoogleClientID, m.cfg.GoogleClientSecret)
 		}
@@ -532,7 +533,7 @@ func (m model) handleKeyInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			m.cfg.Provider = string(p.id)
 			config.Save(m.cfg)
-			config.ApplyToEnv(m.cfg)
+			config.ForceApplyToEnv(m.cfg)
 			m.state = viewList
 			m.message = p.label + " eingerichtet"
 		}
@@ -721,13 +722,21 @@ func (m model) renderSettings() string {
 		}
 		label := labelStyle.Width(26).Render(p.label)
 
-		// Status badge.
+		// Status badge: check config file first, fall back to env var.
 		var badge string
 		if p.id == ai.ProviderOllama {
 			badge = styleOk.Render("● lokal")
 		} else {
-			key := os.Getenv(p.envKey)
-			if key != "" {
+			keySet := os.Getenv(p.envKey) != ""
+			switch p.id {
+			case ai.ProviderAnthropic:
+				keySet = keySet || m.cfg.AnthropicKey != ""
+			case ai.ProviderOpenAI:
+				keySet = keySet || m.cfg.OpenAIKey != ""
+			case ai.ProviderGemini:
+				keySet = keySet || m.cfg.GeminiKey != "" || m.cfg.GoogleRefreshToken != ""
+			}
+			if keySet {
 				badge = styleOk.Render("● Key gesetzt")
 			} else {
 				badge = styleMuted.Render("○ kein Key")

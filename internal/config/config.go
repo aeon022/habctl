@@ -66,8 +66,9 @@ func Save(cfg Config) error {
 	return os.WriteFile(p, data, 0o600)
 }
 
-// ApplyToEnv sets environment variables from cfg for keys not already present in the environment.
-// Call this early in main() so that ai.Detect() picks up saved keys.
+// ApplyToEnv sets environment variables from cfg only when the variable is not
+// already set in the process environment. Call this at startup so that shell
+// env vars take precedence over saved config values.
 func ApplyToEnv(cfg Config) {
 	setIfMissing := func(key, val string) {
 		if val != "" && os.Getenv(key) == "" {
@@ -83,4 +84,24 @@ func ApplyToEnv(cfg Config) {
 	setIfMissing("GOOGLE_CLIENT_ID", cfg.GoogleClientID)
 	setIfMissing("GOOGLE_CLIENT_SECRET", cfg.GoogleClientSecret)
 	setIfMissing("GOOGLE_REFRESH_TOKEN", cfg.GoogleRefreshToken)
+}
+
+// ForceApplyToEnv unconditionally overwrites environment variables from cfg.
+// Call this after saving config changes so ai.Detect() immediately picks up
+// the new values without needing a restart.
+func ForceApplyToEnv(cfg Config) {
+	set := func(key, val string) {
+		if val != "" {
+			os.Setenv(key, val)
+		}
+	}
+	set("HABCTL_PROVIDER", cfg.Provider)
+	set("ANTHROPIC_API_KEY", cfg.AnthropicKey)
+	set("OPENAI_API_KEY", cfg.OpenAIKey)
+	set("GEMINI_API_KEY", cfg.GeminiKey)
+	set("OLLAMA_HOST", cfg.OllamaHost)
+	set("OLLAMA_MODEL", cfg.OllamaModel)
+	set("GOOGLE_CLIENT_ID", cfg.GoogleClientID)
+	set("GOOGLE_CLIENT_SECRET", cfg.GoogleClientSecret)
+	set("GOOGLE_REFRESH_TOKEN", cfg.GoogleRefreshToken)
 }
