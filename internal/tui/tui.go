@@ -637,7 +637,7 @@ func (m model) renderSuggest() string {
 	if m.suggestText == "" {
 		b.WriteString(styleMuted.Render("Generiere Vorschläge…") + "\n")
 	} else {
-		b.WriteString(m.suggestText)
+		b.WriteString(wordWrap(m.suggestText, 68))
 	}
 
 	if m.suggestDone {
@@ -746,6 +746,33 @@ func progressBar(done, total, width int) string {
 		filled = width
 	}
 	return strings.Repeat("█", filled) + strings.Repeat("░", width-filled)
+}
+
+// wordWrap wraps plain text at width characters, preserving existing newlines.
+func wordWrap(text string, width int) string {
+	var out strings.Builder
+	for _, line := range strings.Split(text, "\n") {
+		if len([]rune(line)) <= width {
+			out.WriteString(line + "\n")
+			continue
+		}
+		words := strings.Fields(line)
+		col := 0
+		for i, w := range words {
+			wl := len([]rune(w))
+			if i > 0 && col+1+wl > width {
+				out.WriteString("\n")
+				col = 0
+			} else if i > 0 {
+				out.WriteString(" ")
+				col++
+			}
+			out.WriteString(w)
+			col += wl
+		}
+		out.WriteString("\n")
+	}
+	return strings.TrimRight(out.String(), "\n")
 }
 
 func truncate(s string, n int) string {

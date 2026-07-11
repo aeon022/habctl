@@ -155,9 +155,27 @@ func callOpenAICompat(info ProviderInfo, system, prompt string, out func(string)
 		}
 	}
 	if err := stream.Err(); err != nil {
-		return "", fmt.Errorf("%s: %w", info.Display, err)
+		return "", fmt.Errorf("%s: %w", info.Display, friendlyNetErr(err))
 	}
 	return full.String(), nil
+}
+
+// friendlyNetErr replaces low-level Go network errors with readable messages.
+func friendlyNetErr(err error) error {
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "lookup") || strings.Contains(msg, "no such host"):
+		return fmt.Errorf("DNS-Fehler — Domain nicht erreichbar. VPN/Proxy/Firewall prüfen oder Ollama (lokal) nutzen")
+	case strings.Contains(msg, "connection refused"):
+		return fmt.Errorf("Verbindung abgelehnt — API-Server nicht erreichbar")
+	case strings.Contains(msg, "timeout") || strings.Contains(msg, "deadline exceeded"):
+		return fmt.Errorf("Timeout — API-Server antwortet nicht")
+	case strings.Contains(msg, "401") || strings.Contains(msg, "Unauthorized"):
+		return fmt.Errorf("API-Key ungültig — Settings (S) öffnen und Key prüfen")
+	case strings.Contains(msg, "403") || strings.Contains(msg, "Forbidden"):
+		return fmt.Errorf("Zugriff verweigert — API-Key hat keine Berechtigung")
+	}
+	return err
 }
 
 // Call dispatches to the correct provider backend.
