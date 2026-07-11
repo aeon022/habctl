@@ -4,10 +4,13 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"os/exec"
+	"runtime"
 	"strings"
 	"time"
 
 	"github.com/aeon022/habctl/internal/ai"
+	"github.com/aeon022/habctl/internal/config"
 	"github.com/aeon022/habctl/internal/models"
 	"github.com/aeon022/habctl/internal/store"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -31,12 +34,29 @@ var (
 	styleOkBold = lipgloss.NewStyle().Foreground(colorOk).Bold(true)
 	styleWarn   = lipgloss.NewStyle().Foreground(colorWarn)
 	styleWarnBd = lipgloss.NewStyle().Foreground(colorWarn).Bold(true)
+	styleFg     = lipgloss.NewStyle().Foreground(colorFg)
 
 	panelStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(colorBorder).
 			Padding(1, 2)
 )
+
+// ── provider table ────────────────────────────────────────────────────────────
+
+type providerEntry struct {
+	id      ai.Provider
+	label   string
+	keyPage string // URL to open for API key
+	envKey  string // env var that holds the key
+}
+
+var providers = []providerEntry{
+	{ai.ProviderAnthropic, "Anthropic / Claude", "https://console.anthropic.com/account/keys", "ANTHROPIC_API_KEY"},
+	{ai.ProviderOpenAI, "OpenAI / ChatGPT", "https://platform.openai.com/api-keys", "OPENAI_API_KEY"},
+	{ai.ProviderGemini, "Google Gemini", "https://aistudio.google.com/apikey", "GEMINI_API_KEY"},
+	{ai.ProviderOllama, "Ollama (lokal)", "", ""},
+}
 
 // ── view state ───────────────────────────────────────────────────────────────
 
@@ -47,6 +67,8 @@ const (
 	viewAddInput
 	viewHelp
 	viewSuggest
+	viewSettings
+	viewKeyInput
 )
 
 // ── messages ─────────────────────────────────────────────────────────────────
@@ -69,17 +91,19 @@ type statusMsg string
 // ── model ────────────────────────────────────────────────────────────────────
 
 type model struct {
-	habits      []models.HabitStats
-	cursor      int
-	state       viewState
-	input       textinput.Model
-	s           *store.Store
-	message     string
-	isErr       bool
-	weekView    bool
-	suggestText string
-	suggestDone bool
-	suggestCh   <-chan suggestChunkResult
+	habits         []models.HabitStats
+	cursor         int
+	state          viewState
+	input          textinput.Model
+	s              *store.Store
+	message        string
+	isErr          bool
+	weekView       bool
+	suggestText    string
+	suggestDone    bool
+	suggestCh      <-chan suggestChunkResult
+	settingsCursor int
+	cfg            config.Config
 }
 
 // ── entry point ──────────────────────────────────────────────────────────────
@@ -89,7 +113,9 @@ func Run(s *store.Store) error {
 	ti.Placeholder = "Habit name…"
 	ti.CharLimit = 60
 
-	m := model{s: s, input: ti}
+	cfg, _ := config.Load()
+
+	m := model{s: s, input: ti, cfg: cfg}
 	p := tea.NewProgram(m,
 		tea.WithAltScreen(),
 		tea.WithInput(os.Stdin),
@@ -155,12 +181,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleAddInput(msg)
 		case viewSuggest:
 			return m.handleSuggest(msg)
+		case viewSettings:
+			return m.handleSettings(msg)
+		case viewKeyInput:
+			return m.handleKeyInput(msg)
 		default:
 			return m.handleList(msg)
 		}
 	}
 
-	if m.state == viewAddInput {
+	if m.state == viewAddInput || m.state == viewKeyInput {
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)
 		return m, cmd
@@ -230,7 +260,7 @@ func (m model) handleList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.suggestCh = ch
 		go func() {
 			req := ai.SuggestRequest{ExistingHabits: existing, Count: 6}
-			_, err := ai.SuggestOllama(req, func(chunk string) {
+			_, err := ai.Suggest(req, func(chunk string) {
 				ch <- suggestChunkResult{text: chunk}
 			})
 			if err != nil {
@@ -240,12 +270,19 @@ func (m model) handleList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}()
 		return m, waitForChunk(m.suggestCh)
 
+	case "S":
+		cfg, _ := config.Load()
+		m.cfg = cfg
+		m.state = viewSettings
+		m.settingsCursor = 0
+
 	case "?":
 		m.state = viewHelp
 
 	case "n":
 		m.state = viewAddInput
 		m.input.Reset()
+		m.input.Placeholder = "Habit name…"
 		m.input.Focus()
 
 	case "d":
@@ -284,10 +321,94 @@ func (m model) handleSuggest(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.suggestDone {
 			m.state = viewAddInput
 			m.input.Reset()
+			m.input.Placeholder = "Habit name…"
 			m.input.Focus()
 		}
 	}
 	return m, nil
+}
+
+func (m model) handleSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+	case "esc", "q":
+		m.state = viewList
+
+	case "j", "down":
+		if m.settingsCursor < len(providers)-1 {
+			m.settingsCursor++
+		}
+
+	case "k", "up":
+		if m.settingsCursor > 0 {
+			m.settingsCursor--
+		}
+
+	case "enter":
+		p := providers[m.settingsCursor]
+		if p.id == ai.ProviderOllama {
+			// Ollama needs no key — just activate.
+			m.cfg.Provider = string(ai.ProviderOllama)
+			config.Save(m.cfg)
+			config.ApplyToEnv(m.cfg)
+			m.state = viewList
+			m.message = "Ollama aktiv (lokal)"
+		} else {
+			m.state = viewKeyInput
+			m.input.Reset()
+			m.input.Placeholder = "API-Key einfügen…"
+			// Pre-fill with existing saved key.
+			existingKey := os.Getenv(p.envKey)
+			if existingKey != "" {
+				m.input.SetValue(existingKey)
+			}
+			m.input.Focus()
+		}
+	}
+	return m, nil
+}
+
+func (m model) handleKeyInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+
+	case "esc":
+		m.state = viewSettings
+		return m, nil
+
+	case "o":
+		p := providers[m.settingsCursor]
+		if p.keyPage != "" {
+			go openBrowser(p.keyPage)
+		}
+		return m, nil
+
+	case "enter":
+		key := strings.TrimSpace(m.input.Value())
+		p := providers[m.settingsCursor]
+		if key != "" {
+			switch p.id {
+			case ai.ProviderAnthropic:
+				m.cfg.AnthropicKey = key
+			case ai.ProviderOpenAI:
+				m.cfg.OpenAIKey = key
+			case ai.ProviderGemini:
+				m.cfg.GeminiKey = key
+			}
+			m.cfg.Provider = string(p.id)
+			config.Save(m.cfg)
+			config.ApplyToEnv(m.cfg)
+			m.state = viewList
+			m.message = p.label + " eingerichtet"
+		}
+		return m, nil
+	}
+
+	var cmd tea.Cmd
+	m.input, cmd = m.input.Update(msg)
+	return m, cmd
 }
 
 func (m model) handleAddInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -326,6 +447,10 @@ func (m model) View() string {
 		return m.renderAdd()
 	case viewSuggest:
 		return m.renderSuggest()
+	case viewSettings:
+		return m.renderSettings()
+	case viewKeyInput:
+		return m.renderKeyInput()
 	default:
 		return m.renderList()
 	}
@@ -360,7 +485,7 @@ func (m model) renderList() string {
 			}
 			if i == m.cursor {
 				cursor = styleLime.Render("▶ ")
-				nameStyle = lipgloss.NewStyle().Foreground(colorFg)
+				nameStyle = styleFg
 			}
 
 			todayStr := styleMuted.Render("–")
@@ -414,19 +539,100 @@ func (m model) renderList() string {
 		b.WriteString(msgStyle.Render(m.message) + "\n\n")
 	}
 
-	b.WriteString(styleMuted.Render("space check in · n new · d delete · s suggest (Ollama) · w 7d/30d · ? help · q quit"))
+	b.WriteString(styleMuted.Render("space check in · n new · d delete · s KI-Vorschläge · S settings · w 7d/30d · ? help · q quit"))
+	return panelStyle.Render(b.String())
+}
+
+func (m model) renderSettings() string {
+	var b strings.Builder
+
+	b.WriteString(styleLime.Bold(true).Render("KI-Provider") + "\n")
+	b.WriteString(styleMuted.Render("Wähle deinen KI-Anbieter und richte ihn ein.") + "\n\n")
+
+	// Detect active provider from env.
+	activeProvider := ai.Provider(os.Getenv("HABCTL_PROVIDER"))
+	if activeProvider == "" {
+		if info, err := ai.Detect(); err == nil {
+			activeProvider = info.Name
+		}
+	}
+
+	for i, p := range providers {
+		selected := i == m.settingsCursor
+		active := p.id == activeProvider
+
+		cursor := "  "
+		if selected {
+			cursor = styleLime.Render("▶ ")
+		}
+
+		// Label: 26 chars wide via lipgloss (ANSI-safe).
+		var labelStyle lipgloss.Style
+		switch {
+		case selected && active:
+			labelStyle = lipgloss.NewStyle().Foreground(colorLime).Bold(true)
+		case selected:
+			labelStyle = lipgloss.NewStyle().Foreground(colorFg)
+		case active:
+			labelStyle = lipgloss.NewStyle().Foreground(colorLime)
+		default:
+			labelStyle = lipgloss.NewStyle().Foreground(colorMuted)
+		}
+		label := labelStyle.Width(26).Render(p.label)
+
+		// Status badge.
+		var badge string
+		if p.id == ai.ProviderOllama {
+			badge = styleOk.Render("● lokal")
+		} else {
+			key := os.Getenv(p.envKey)
+			if key != "" {
+				badge = styleOk.Render("● Key gesetzt")
+			} else {
+				badge = styleMuted.Render("○ kein Key")
+			}
+		}
+		if active {
+			badge += " " + styleLime.Render("← aktiv")
+		}
+
+		b.WriteString(cursor + label + "  " + badge + "\n")
+	}
+
+	b.WriteString("\n" + styleMuted.Render("enter konfigurieren · j/k navigieren · esc zurück"))
+	return panelStyle.Render(b.String())
+}
+
+func (m model) renderKeyInput() string {
+	var b strings.Builder
+
+	p := providers[m.settingsCursor]
+
+	b.WriteString(styleLime.Bold(true).Render(p.label+" einrichten") + "\n\n")
+
+	if p.keyPage != "" {
+		b.WriteString(styleMuted.Render("Schritt 1 — API-Key holen:") + "\n")
+		b.WriteString("  " + styleOk.Render("o") + styleMuted.Render("  öffnet "+p.keyPage) + "\n\n")
+		b.WriteString(styleMuted.Render("Schritt 2 — Key einfügen (Cmd+V):") + "\n")
+	} else {
+		b.WriteString(styleMuted.Render("API-Key eingeben:") + "\n")
+	}
+
+	b.WriteString("  " + m.input.View() + "\n\n")
+	b.WriteString(styleMuted.Render("enter speichern · o Browser öffnen · esc zurück"))
 	return panelStyle.Render(b.String())
 }
 
 func (m model) renderSuggest() string {
 	var b strings.Builder
 
-	model := os.Getenv("OLLAMA_MODEL")
-	if model == "" {
-		model = "llama3.2"
+	providerLabel := ""
+	if info, err := ai.Detect(); err == nil {
+		providerLabel = styleMuted.Render("via " + info.Display)
+	} else {
+		providerLabel = styleWarn.Render("kein Provider — S für Settings")
 	}
-	b.WriteString(styleLime.Bold(true).Render("Habit-Vorschläge") +
-		styleMuted.Render(fmt.Sprintf("  via Ollama (%s)", model)) + "\n\n")
+	b.WriteString(styleLime.Bold(true).Render("Habit-Vorschläge") + "  " + providerLabel + "\n\n")
 
 	if m.suggestText == "" {
 		b.WriteString(styleMuted.Render("Generiere Vorschläge…") + "\n")
@@ -453,7 +659,7 @@ func (m model) renderAdd() string {
 
 func (m model) renderHelp() string {
 	lime := styleLime.Bold(true)
-	key := lipgloss.NewStyle().Foreground(colorLime).Width(20)
+	key := lipgloss.NewStyle().Foreground(colorLime).Width(22)
 	desc := styleMuted
 
 	row := func(k, d string) string {
@@ -479,7 +685,8 @@ func (m model) renderHelp() string {
 	b.WriteString(row("space / enter", "check in today"))
 	b.WriteString(row("n", "add new habit"))
 	b.WriteString(row("d", "delete selected habit"))
-	b.WriteString(row("s", "KI-Vorschläge via Ollama (lokal)"))
+	b.WriteString(row("s", "KI-Vorschläge (aktiver Provider)"))
+	b.WriteString(row("S", "Settings — Provider & API-Keys"))
 
 	b.WriteString(section("View"))
 	b.WriteString(row("w", "toggle 7d / 30d view"))
@@ -565,6 +772,20 @@ func streakMilestone(n int) string {
 		return "🎉 100 days!!"
 	}
 	return ""
+}
+
+func openBrowser(url string) {
+	var cmd string
+	var args []string
+	switch runtime.GOOS {
+	case "darwin":
+		cmd, args = "open", []string{url}
+	case "linux":
+		cmd, args = "xdg-open", []string{url}
+	default:
+		cmd, args = "cmd", []string{"/c", "start", url}
+	}
+	exec.Command(cmd, args...).Start()
 }
 
 func max(a, b int) int {
