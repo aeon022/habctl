@@ -753,19 +753,19 @@ func (m model) renderKeyInput() string {
 
 	switch p.id {
 	case ai.ProviderGemini:
-		b.WriteString(styleMuted.Render("Gemini nutzt deinen Google-Account — aber der Login\n"+
-			"läuft über AI Studio, nicht direkt hier.\n\n") +
-			styleOk.Render("o") + styleMuted.Render("  Browser öffnen: aistudio.google.com\n") +
-			styleMuted.Render("   → Mit Google-Account einloggen\n") +
-			styleMuted.Render("   → \"Get API key\" → \"Create API key\"\n") +
-			styleMuted.Render("   → Key kopieren (Cmd+C)\n\n") +
-			styleMuted.Render("API-Key einfügen (Cmd+V):\n"))
+		b.WriteString(styleMuted.Render("Gemini nutzt deinen Google-Account — aber der") + "\n")
+		b.WriteString(styleMuted.Render("Login läuft über AI Studio, nicht direkt hier.") + "\n\n")
+		b.WriteString(styleOk.Render("o") + styleMuted.Render("  Browser öffnen: aistudio.google.com") + "\n")
+		b.WriteString(styleMuted.Render("   → Mit Google-Account einloggen") + "\n")
+		b.WriteString(styleMuted.Render("   → \"Get API key\" → \"Create API key\"") + "\n")
+		b.WriteString(styleMuted.Render("   → Key kopieren (Cmd+C)") + "\n\n")
+		b.WriteString(styleMuted.Render("API-Key einfügen (Cmd+V):") + "\n")
 	default:
 		if p.keyPage != "" {
-			b.WriteString(styleOk.Render("o") + styleMuted.Render("  öffnet "+p.keyPage+"\n\n") +
-				styleMuted.Render("API-Key einfügen (Cmd+V):\n"))
+			b.WriteString(styleOk.Render("o") + styleMuted.Render("  öffnet "+p.keyPage) + "\n\n")
+			b.WriteString(styleMuted.Render("API-Key einfügen (Cmd+V):") + "\n")
 		} else {
-			b.WriteString(styleMuted.Render("API-Key eingeben:\n"))
+			b.WriteString(styleMuted.Render("API-Key eingeben:") + "\n")
 		}
 	}
 
@@ -838,20 +838,12 @@ func (m model) renderGeminiCID() string {
 	var b strings.Builder
 	b.WriteString(styleLime.Bold(true).Render("Google OAuth2 Client einrichten") + "\n")
 	b.WriteString(styleMuted.Render("Einmalig — dauert 2 Minuten") + "\n\n")
-
 	b.WriteString(styleOk.Render("o") + styleMuted.Render("  öffnet console.cloud.google.com/apis/credentials") + "\n\n")
-
-	steps := []string{
-		"Projekt wählen oder neu anlegen",
-		"\"+ Create Credentials\" → \"OAuth 2.0 Client ID\"",
-		"Anwendungstyp: \"Desktop-App\", Name: habctl",
-		"Client ID kopieren (Cmd+C)",
-	}
-	for i, s := range steps {
-		b.WriteString(styleMuted.Render(fmt.Sprintf("  %d. %s", i+1, s)) + "\n")
-	}
-
-	b.WriteString("\n" + styleMuted.Render("Client ID (Cmd+V):") + "\n")
+	b.WriteString(styleMuted.Render("1. Projekt wählen oder neu anlegen") + "\n")
+	b.WriteString(styleMuted.Render("2. \"+ Create Credentials\" → \"OAuth 2.0 Client ID\"") + "\n")
+	b.WriteString(styleMuted.Render("3. Anwendungstyp: \"Desktop-App\", Name: habctl") + "\n")
+	b.WriteString(styleMuted.Render("4. Client ID kopieren (Cmd+C)") + "\n\n")
+	b.WriteString(styleMuted.Render("Client ID (Cmd+V):") + "\n")
 	b.WriteString("  " + m.input.View() + "\n\n")
 	b.WriteString(styleMuted.Render("enter weiter · o Browser öffnen · esc zurück"))
 	return panelStyle.Render(b.String())
@@ -860,8 +852,8 @@ func (m model) renderGeminiCID() string {
 func (m model) renderGeminiCS() string {
 	var b strings.Builder
 	b.WriteString(styleLime.Bold(true).Render("Google OAuth2 Client Secret") + "\n\n")
-	b.WriteString(styleMuted.Render("In Google Cloud Console: gleiche Credentials-Seite\n"+
-		"→ Client Secret kopieren (für Desktop-Apps semi-öffentlich)") + "\n\n")
+	b.WriteString(styleMuted.Render("In Google Cloud Console: gleiche Credentials-Seite") + "\n")
+	b.WriteString(styleMuted.Render("→ Client Secret kopieren (für Desktop-Apps semi-öffentlich)") + "\n\n")
 	b.WriteString(styleMuted.Render("Client Secret (Cmd+V):") + "\n")
 	b.WriteString("  " + m.input.View() + "\n\n")
 	b.WriteString(styleMuted.Render("enter Browser-Login starten · esc zurück"))
