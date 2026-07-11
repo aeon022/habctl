@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aeon022/habctl/internal/ai"
 	"github.com/aeon022/habctl/internal/models"
 	"github.com/aeon022/habctl/internal/store"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -20,6 +21,7 @@ var (
 	colorLime   = lipgloss.AdaptiveColor{Light: "#65a30d", Dark: "#84cc16"}
 	colorMuted  = lipgloss.AdaptiveColor{Light: "#64748b", Dark: "#718096"}
 	colorOk     = lipgloss.AdaptiveColor{Light: "#16a34a", Dark: "#4ade80"}
+	colorWarn   = lipgloss.AdaptiveColor{Light: "#d97706", Dark: "#fbbf24"} // at-risk amber
 	colorFg     = lipgloss.AdaptiveColor{Light: "#1e293b", Dark: "#e2e8f0"}
 	colorBorder = lipgloss.AdaptiveColor{Light: "#cbd5e1", Dark: "#1e1e2e"}
 
@@ -27,6 +29,8 @@ var (
 	styleMuted  = lipgloss.NewStyle().Foreground(colorMuted)
 	styleOk     = lipgloss.NewStyle().Foreground(colorOk)
 	styleOkBold = lipgloss.NewStyle().Foreground(colorOk).Bold(true)
+	styleWarn   = lipgloss.NewStyle().Foreground(colorWarn)
+	styleWarnBd = lipgloss.NewStyle().Foreground(colorWarn).Bold(true)
 
 	panelStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
@@ -42,9 +46,22 @@ const (
 	viewList viewState = iota
 	viewAddInput
 	viewHelp
+	viewSuggest
 )
 
-// ── messages ─────────────────────────────────────────────────────────────────
+// ── streaming suggest ─────────────────────────────────────────────────────────
+
+type suggestChunkResult struct {
+	text string
+	done bool
+	err  error
+}
+
+type suggestChunkMsg string
+type suggestDoneMsg struct{}
+type suggestErrMsg struct{ err error }
+
+// ── other messages ────────────────────────────────────────────────────────────
 
 type habitsLoadedMsg []models.HabitStats
 type errMsg struct{ err error }
@@ -54,13 +71,17 @@ type statusMsg string
 // ── model ────────────────────────────────────────────────────────────────────
 
 type model struct {
-	habits  []models.HabitStats
-	cursor  int
-	state   viewState
-	input   textinput.Model
-	s       *store.Store
-	message string
-	isErr   bool
+	habits      []models.HabitStats
+	cursor      int
+	state       viewState
+	input       textinput.Model
+	s           *store.Store
+	message     string
+	isErr       bool
+	weekView    bool             // false = 30-day, true = 7-day
+	suggestText string           // accumulated AI response
+	suggestDone bool             // streaming finished
+	suggestCh   <-chan suggestChunkResult
 }
 
 // ── entry point ──────────────────────────────────────────────────────────────
@@ -83,7 +104,7 @@ func Run(s *store.Store) error {
 // ── bubbletea interface ───────────────────────────────────────────────────────
 
 func (m model) Init() tea.Cmd {
-	return loadHabits(m.s)
+	return loadHabits(m.s, 30)
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -99,7 +120,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case statusMsg:
 		m.message = string(msg)
 		m.isErr = false
-		return m, tea.Batch(loadHabits(m.s), clearAfter())
+		days := 30
+		if m.weekView {
+			days = 7
+		}
+		return m, tea.Batch(loadHabits(m.s, days), clearAfter())
 
 	case errMsg:
 		m.message = "✗ " + msg.err.Error()
@@ -111,21 +136,32 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.isErr = false
 		return m, nil
 
+	// ── suggest streaming ────────────────────────────────────────────────────
+
+	case suggestChunkMsg:
+		m.suggestText += string(msg)
+		return m, waitForChunk(m.suggestCh)
+
+	case suggestDoneMsg:
+		m.suggestDone = true
+		return m, nil
+
+	case suggestErrMsg:
+		m.suggestDone = true
+		m.suggestText += "\n\n✗ " + msg.err.Error()
+		return m, nil
+
 	case tea.KeyMsg:
-		if m.state == viewHelp {
-			switch msg.String() {
-			case "?", "esc", "q", "ctrl+c":
-				if msg.String() == "ctrl+c" {
-					return m, tea.Quit
-				}
-				m.state = viewList
-			}
-			return m, nil
-		}
-		if m.state == viewAddInput {
+		switch m.state {
+		case viewHelp:
+			return m.handleHelp(msg)
+		case viewAddInput:
 			return m.handleAddInput(msg)
+		case viewSuggest:
+			return m.handleSuggest(msg)
+		default:
+			return m.handleList(msg)
 		}
-		return m.handleList(msg)
 	}
 
 	if m.state == viewAddInput {
@@ -178,6 +214,40 @@ func (m model) handleList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return statusMsg(out)
 		}
 
+	case "w":
+		m.weekView = !m.weekView
+		days := 30
+		if m.weekView {
+			days = 7
+		}
+		return m, loadHabits(m.s, days)
+
+	case "s":
+		m.state = viewSuggest
+		m.suggestText = ""
+		m.suggestDone = false
+		s := m.s
+		var existing []string
+		for _, h := range m.habits {
+			existing = append(existing, h.Habit.Name)
+		}
+		ch := make(chan suggestChunkResult, 64)
+		m.suggestCh = ch
+		go func() {
+			_, err := ai.Suggest(ai.SuggestRequest{
+				ExistingHabits: existing,
+				Count:          6,
+			}, func(chunk string) {
+				ch <- suggestChunkResult{text: chunk}
+			})
+			if err != nil {
+				ch <- suggestChunkResult{err: err}
+			}
+			ch <- suggestChunkResult{done: true}
+			_ = s // keep store reference alive
+		}()
+		return m, waitForChunk(m.suggestCh)
+
 	case "?":
 		m.state = viewHelp
 
@@ -197,6 +267,32 @@ func (m model) handleList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return errMsg{err}
 			}
 			return statusMsg("Deleted: " + name)
+		}
+	}
+	return m, nil
+}
+
+func (m model) handleHelp(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+	case "?", "esc", "q":
+		m.state = viewList
+	}
+	return m, nil
+}
+
+func (m model) handleSuggest(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+	case "esc", "q":
+		m.state = viewList
+	case "n":
+		if m.suggestDone {
+			m.state = viewAddInput
+			m.input.Reset()
+			m.input.Focus()
 		}
 	}
 	return m, nil
@@ -236,6 +332,8 @@ func (m model) View() string {
 		return m.renderHelp()
 	case viewAddInput:
 		return m.renderAdd()
+	case viewSuggest:
+		return m.renderSuggest()
 	default:
 		return m.renderList()
 	}
@@ -244,17 +342,30 @@ func (m model) View() string {
 func (m model) renderList() string {
 	var b strings.Builder
 
-	b.WriteString(styleLime.Bold(true).Render("habctl") + "\n\n")
+	days := 30
+	if m.weekView {
+		days = 7
+	}
+	dayLabel := fmt.Sprintf("%dd", days)
+
+	title := styleLime.Bold(true).Render("habctl")
+	viewToggle := styleMuted.Render(fmt.Sprintf("[w] %s view", dayLabel))
+	b.WriteString(title + "  " + viewToggle + "\n\n")
 
 	if len(m.habits) == 0 {
 		b.WriteString(styleMuted.Render("No habits yet. Press n to add one.") + "\n")
 	} else {
-		header := fmt.Sprintf("  %-24s  %-7s  %-14s  %s", "Habit", "today", "streak", "30-day")
+		header := fmt.Sprintf("  %-24s  %-7s  %-14s  %s", "Habit", "today", "streak", dayLabel)
 		b.WriteString(styleMuted.Render(header) + "\n")
 
 		for i, h := range m.habits {
+			atRisk := h.Streak > 0 && !h.CheckedToday
+
 			cursor := "  "
 			nameStyle := styleMuted
+			if atRisk && i != m.cursor {
+				nameStyle = styleWarn
+			}
 			if i == m.cursor {
 				cursor = styleLime.Render("▶ ")
 				nameStyle = lipgloss.NewStyle().Foreground(colorFg)
@@ -263,27 +374,37 @@ func (m model) renderList() string {
 			todayStr := styleMuted.Render("–")
 			if h.CheckedToday {
 				todayStr = styleOk.Render("✓")
+			} else if atRisk {
+				todayStr = styleWarn.Render("!")
 			}
 
 			streakNum := fmt.Sprintf("%d day", h.Streak)
 			if h.Streak != 1 {
 				streakNum += "s"
 			}
-			streakStyle := styleMuted
-			if h.CheckedToday && h.Streak > 0 {
-				streakStyle = styleOkBold
+			var streakStr string
+			switch {
+			case h.CheckedToday && h.Streak > 0:
+				streakStr = styleOkBold.Render(streakNum)
+			case atRisk:
+				streakStr = styleWarnBd.Render(streakNum)
+			default:
+				streakStr = styleMuted.Render(streakNum)
 			}
-			streakStr := streakStyle.Render(streakNum)
 			if h.Streak >= 7 {
 				streakStr += " 🔥"
 			}
 
-			bar := progressBar(h.TotalDays, 30, 18)
+			bar := progressBar(h.TotalDays, days, 18)
 			pct := 0
 			if h.TotalDays > 0 {
-				pct = int(math.Round(float64(h.TotalDays) / 30.0 * 100))
+				pct = int(math.Round(float64(h.TotalDays) / float64(days) * 100))
 			}
-			barStr := styleLime.Render(bar) + styleMuted.Render(fmt.Sprintf(" %d%%", pct))
+			barStyle := styleLime
+			if atRisk {
+				barStyle = styleWarn
+			}
+			barStr := barStyle.Render(bar) + styleMuted.Render(fmt.Sprintf(" %d%%", pct))
 
 			name := nameStyle.Render(truncate(h.Habit.Name, 24))
 			b.WriteString(fmt.Sprintf("%s%-26s  %-9s  %-20s  %s\n",
@@ -301,7 +422,29 @@ func (m model) renderList() string {
 		b.WriteString(msgStyle.Render(m.message) + "\n\n")
 	}
 
-	b.WriteString(styleMuted.Render("space/enter check in · n new · d delete · ? help · q quit"))
+	b.WriteString(styleMuted.Render("space check in · n new · d delete · s suggest · w week/month · ? help · q quit"))
+	return panelStyle.Render(b.String())
+}
+
+func (m model) renderSuggest() string {
+	var b strings.Builder
+
+	title := styleLime.Bold(true).Render("KI-Vorschläge")
+	b.WriteString(title + "\n\n")
+
+	if m.suggestText == "" {
+		b.WriteString(styleMuted.Render("Generiere Vorschläge…") + "\n")
+	} else {
+		b.WriteString(m.suggestText)
+	}
+
+	if m.suggestDone {
+		b.WriteString("\n\n")
+		b.WriteString(styleMuted.Render("n neuen Habit hinzufügen · esc zurück"))
+	} else {
+		b.WriteString(styleMuted.Render("▌"))
+	}
+
 	return panelStyle.Render(b.String())
 }
 
@@ -315,7 +458,7 @@ func (m model) renderAdd() string {
 
 func (m model) renderHelp() string {
 	lime := styleLime.Bold(true)
-	key := lipgloss.NewStyle().Foreground(colorLime).Width(18)
+	key := lipgloss.NewStyle().Foreground(colorLime).Width(20)
 	desc := styleMuted
 
 	row := func(k, d string) string {
@@ -341,11 +484,15 @@ func (m model) renderHelp() string {
 	b.WriteString(row("space / enter", "check in today"))
 	b.WriteString(row("n", "add new habit"))
 	b.WriteString(row("d", "delete selected habit"))
+	b.WriteString(row("s", "AI habit suggestions"))
 
-	b.WriteString(section("Columns"))
-	b.WriteString(row("today", "✓ = done today  –  = not yet"))
-	b.WriteString(row("streak", "consecutive days ending today"))
-	b.WriteString(row("30-day", "█░ bar = completion rate, last 30 days"))
+	b.WriteString(section("View"))
+	b.WriteString(row("w", "toggle week (7d) / month (30d) view"))
+
+	b.WriteString(section("Status colors"))
+	b.WriteString(row(styleOk.Render("✓  green"), "checked in today"))
+	b.WriteString(row(styleWarn.Render("!  amber"), "streak at risk — check in before midnight!"))
+	b.WriteString(row(styleMuted.Render("–  gray"), "no active streak"))
 
 	b.WriteString(section("Other"))
 	b.WriteString(row("?", "toggle this help screen"))
@@ -358,13 +505,26 @@ func (m model) renderHelp() string {
 
 // ── commands ──────────────────────────────────────────────────────────────────
 
-func loadHabits(s *store.Store) tea.Cmd {
+func loadHabits(s *store.Store, days int) tea.Cmd {
 	return func() tea.Msg {
-		stats, err := s.GetAllStats(30)
+		stats, err := s.GetAllStats(days)
 		if err != nil {
 			return errMsg{err}
 		}
 		return habitsLoadedMsg(stats)
+	}
+}
+
+func waitForChunk(ch <-chan suggestChunkResult) tea.Cmd {
+	return func() tea.Msg {
+		r := <-ch
+		if r.err != nil {
+			return suggestErrMsg{r.err}
+		}
+		if r.done {
+			return suggestDoneMsg{}
+		}
+		return suggestChunkMsg(r.text)
 	}
 }
 
