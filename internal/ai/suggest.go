@@ -1,13 +1,8 @@
 package ai
 
 import (
-	"context"
 	"fmt"
-	"os"
 	"strings"
-
-	anthropic "github.com/anthropics/anthropic-sdk-go"
-	"github.com/anthropics/anthropic-sdk-go/option"
 )
 
 const systemPromptSuggest = `Du bist ein Habit-Coach, der Menschen hilft, bessere Gewohnheiten aufzubauen.
@@ -22,95 +17,73 @@ Beim Vorschlagen von Habits:
 - Vermeide Überschneidungen mit bestehenden Habits
 - Format: **Habit-Name** (Zeit) — Warum es wichtig ist`
 
-// ErrNoAPIKey is returned when ANTHROPIC_API_KEY is not set.
-var ErrNoAPIKey = fmt.Errorf("ANTHROPIC_API_KEY nicht gesetzt")
-
-func newClient() (*anthropic.Client, error) {
-	key := os.Getenv("ANTHROPIC_API_KEY")
-	if key == "" {
-		return nil, ErrNoAPIKey
-	}
-	c := anthropic.NewClient(option.WithAPIKey(key))
-	return &c, nil
-}
+// ErrNoAPIKey is returned when no provider key is configured.
+var ErrNoAPIKey = fmt.Errorf("kein API-Key gefunden — setze ANTHROPIC_API_KEY, OPENAI_API_KEY oder GEMINI_API_KEY")
 
 // SuggestRequest is the input for habit suggestions.
 type SuggestRequest struct {
-	ExistingHabits []string // current habits for context
-	Routine        string   // "morning", "evening", "health", "learning", "productivity", ""
-	Goal           string   // free-text goal, e.g. "mehr Struktur in den Tag"
-	Count          int      // how many to suggest (default 6)
+	ExistingHabits []string
+	Routine        string // morning, evening, health, learning, productivity, ""
+	Goal           string // free-text goal
+	Count          int    // defaults to 6
 }
 
-// Suggest calls Claude and streams habit suggestions to out.
-// Returns the full text when done.
+// Suggest streams habit suggestions from the auto-detected provider.
+// Each text chunk is passed to out as it arrives.
+// Returns the full response and the provider used.
 func Suggest(req SuggestRequest, out func(chunk string)) (string, error) {
-	c, err := newClient()
+	info, err := Detect()
 	if err != nil {
 		return "", err
 	}
-
-	if req.Count == 0 {
-		req.Count = 6
-	}
-
-	prompt := buildPrompt(req)
-
-	stream := c.Messages.NewStreaming(context.Background(), anthropic.MessageNewParams{
-		Model:     anthropic.ModelClaudeHaiku4_5,
-		MaxTokens: 1024,
-		System:    []anthropic.TextBlockParam{{Text: systemPromptSuggest}},
-		Messages:  []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock(prompt))},
-	})
-
-	var full strings.Builder
-	for stream.Next() {
-		event := stream.Current()
-		if event.Type == "content_block_delta" && event.Delta.Type == "text_delta" {
-			text := event.Delta.Text
-			if text != "" {
-				full.WriteString(text)
-				if out != nil {
-					out(text)
-				}
-			}
-		}
-	}
-	if err := stream.Err(); err != nil {
-		return "", fmt.Errorf("Claude: %w", err)
-	}
-	return full.String(), nil
+	return Call(info, systemPromptSuggest, buildPrompt(req), out)
 }
 
 // SuggestBlocking is like Suggest but returns the full result without streaming.
 func SuggestBlocking(req SuggestRequest) (string, error) {
-	c, err := newClient()
+	info, err := Detect()
 	if err != nil {
 		return "", err
 	}
+	return Call(info, systemPromptSuggest, buildPrompt(req), nil)
+}
 
+// SuggestWithProvider runs against a specific provider (for the --provider flag).
+func SuggestWithProvider(req SuggestRequest, p Provider, out func(string)) (string, error) {
+	info, err := Detect()
+	if err != nil && p == "" {
+		return "", err
+	}
+	if p != "" {
+		// Re-detect but constrain to requested provider.
+		info, err = detectForced(p)
+		if err != nil {
+			return "", err
+		}
+	}
+	return Call(info, systemPromptSuggest, buildPrompt(req), out)
+}
+
+func detectForced(p Provider) (ProviderInfo, error) {
+	switch p {
+	case ProviderAnthropic:
+		return ProviderInfo{ProviderAnthropic, "claude-haiku-4-5-20251001", "Claude Haiku (Anthropic)"}, nil
+	case ProviderOpenAI:
+		return ProviderInfo{ProviderOpenAI, "gpt-4o-mini", "GPT-4o mini (OpenAI)"}, nil
+	case ProviderGemini:
+		return ProviderInfo{ProviderGemini, "gemini-2.0-flash", "Gemini 2.0 Flash (Google)"}, nil
+	case ProviderOllama:
+		model := "llama3.2"
+		return ProviderInfo{ProviderOllama, model, "Ollama (" + model + ", local)"}, nil
+	}
+	return ProviderInfo{}, fmt.Errorf("unbekannter Provider %q", p)
+}
+
+func buildPrompt(req SuggestRequest) string {
 	if req.Count == 0 {
 		req.Count = 6
 	}
 
-	prompt := buildPrompt(req)
-
-	msg, err := c.Messages.New(context.Background(), anthropic.MessageNewParams{
-		Model:     anthropic.ModelClaudeHaiku4_5,
-		MaxTokens: 1024,
-		System:    []anthropic.TextBlockParam{{Text: systemPromptSuggest}},
-		Messages:  []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock(prompt))},
-	})
-	if err != nil {
-		return "", fmt.Errorf("Claude: %w", err)
-	}
-	if len(msg.Content) == 0 {
-		return "", fmt.Errorf("leere Antwort von Claude")
-	}
-	return msg.Content[0].Text, nil
-}
-
-func buildPrompt(req SuggestRequest) string {
 	var b strings.Builder
 
 	if len(req.ExistingHabits) > 0 {

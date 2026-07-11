@@ -10,9 +10,10 @@ import (
 )
 
 var (
-	suggestRoutine string
-	suggestGoal    string
-	suggestCount   int
+	suggestRoutine  string
+	suggestGoal     string
+	suggestCount    int
+	suggestProvider string
 )
 
 var suggestCmd = &cobra.Command{
@@ -59,8 +60,15 @@ Examples:
 			}
 		}
 
+		// Show which provider will be used.
+		info, detErr := ai.Detect()
+		providerLabel := ""
+		if detErr == nil {
+			providerLabel = muted.Render("via " + info.Display)
+		}
+
 		fmt.Println()
-		fmt.Println(lime.Render("habctl suggest") + "  " + muted.Render(label))
+		fmt.Println(lime.Render("habctl suggest") + "  " + muted.Render(label) + "  " + providerLabel)
 		fmt.Println()
 
 		req := ai.SuggestRequest{
@@ -70,7 +78,7 @@ Examples:
 			Count:          suggestCount,
 		}
 
-		_, err = ai.Suggest(req, func(chunk string) {
+		_, err = ai.SuggestWithProvider(req, ai.Provider(suggestProvider), func(chunk string) {
 			fmt.Print(chunk)
 			os.Stdout.Sync()
 		})
@@ -93,4 +101,6 @@ func init() {
 		"Dein Ziel (Freitext, z.B. \"mehr Energie am Morgen\")")
 	suggestCmd.Flags().IntVar(&suggestCount, "count", 6,
 		"Anzahl der Vorschläge")
+	suggestCmd.Flags().StringVar(&suggestProvider, "provider", "",
+		"KI-Anbieter: anthropic, openai, gemini, ollama (Standard: auto-detect)")
 }
