@@ -52,10 +52,31 @@ var checkCmd = &cobra.Command{
 			msg += " 🔥"
 		}
 		fmt.Println(msg)
+		if ms := streakMilestone(stats.Streak); ms != "" {
+			fmt.Println("  " + ms)
+		}
 		return nil
 	},
 }
 
 func init() {
 	checkCmd.Flags().StringVar(&checkDate, "date", "", "Date to check in for (YYYY-MM-DD, default: today)")
+}
+
+func streakMilestone(streak int) string {
+	switch streak {
+	case 7:
+		return "🎯 One week! Keep it up!"
+	case 14:
+		return "💪 Two weeks strong!"
+	case 21:
+		return "🧠 21 days — you're building a real habit!"
+	case 30:
+		return "🏆 One month! Incredible."
+	case 60:
+		return "🌟 60 days! You're unstoppable."
+	case 100:
+		return "🎉 100 days!! Legendary."
+	}
+	return ""
 }

@@ -37,6 +37,9 @@ func init() {
 		statsCmd,
 		deleteCmd,
 		mcpCmd,
+		tuiCmd,
+		todayCmd,
+		remindCmd,
 	)
 }
 
