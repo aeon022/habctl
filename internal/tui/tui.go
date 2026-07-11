@@ -4,12 +4,11 @@ import (
 	"fmt"
 	"math"
 	"os"
-	"os/exec"
-	"runtime"
 	"strings"
 	"time"
 
 	"github.com/aeon022/habctl/internal/ai"
+	"github.com/aeon022/habctl/internal/auth"
 	"github.com/aeon022/habctl/internal/config"
 	"github.com/aeon022/habctl/internal/models"
 	"github.com/aeon022/habctl/internal/store"
@@ -69,6 +68,10 @@ const (
 	viewSuggest
 	viewSettings
 	viewKeyInput
+	viewGeminiMenu  // choose: OAuth2 browser login vs API key
+	viewGeminiCID   // enter Google OAuth2 Client ID
+	viewGeminiCS    // enter Google OAuth2 Client Secret
+	viewOAuthWait   // waiting for browser OAuth2 callback
 )
 
 // ── messages ─────────────────────────────────────────────────────────────────
@@ -83,6 +86,9 @@ type suggestChunkMsg string
 type suggestDoneMsg struct{}
 type suggestErrMsg struct{ err error }
 
+type oauthSuccessMsg struct{ refreshToken string }
+type oauthErrMsg struct{ err error }
+
 type habitsLoadedMsg []models.HabitStats
 type errMsg struct{ err error }
 type clearMsgMsg struct{}
@@ -91,19 +97,21 @@ type statusMsg string
 // ── model ────────────────────────────────────────────────────────────────────
 
 type model struct {
-	habits         []models.HabitStats
-	cursor         int
-	state          viewState
-	input          textinput.Model
-	s              *store.Store
-	message        string
-	isErr          bool
-	weekView       bool
-	suggestText    string
-	suggestDone    bool
-	suggestCh      <-chan suggestChunkResult
-	settingsCursor int
-	cfg            config.Config
+	habits            []models.HabitStats
+	cursor            int
+	state             viewState
+	input             textinput.Model
+	s                 *store.Store
+	message           string
+	isErr             bool
+	weekView          bool
+	suggestText       string
+	suggestDone       bool
+	suggestCh         <-chan suggestChunkResult
+	settingsCursor    int
+	geminiMenuCursor  int    // 0 = Browser Login, 1 = API Key
+	geminiClientID    string // temp during OAuth setup
+	cfg               config.Config
 }
 
 // ── entry point ──────────────────────────────────────────────────────────────
@@ -173,6 +181,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.suggestText += "\n\n✗ " + msg.err.Error()
 		return m, nil
 
+	case oauthSuccessMsg:
+		m.cfg.GoogleRefreshToken = msg.refreshToken
+		config.Save(m.cfg)
+		config.ApplyToEnv(m.cfg)
+		m.state = viewList
+		m.message = "Google-Login erfolgreich — Gemini aktiv"
+		return m, nil
+
+	case oauthErrMsg:
+		m.state = viewSettings
+		m.message = "Login fehlgeschlagen: " + msg.err.Error()
+		m.isErr = true
+		return m, clearAfter()
+
 	case tea.KeyMsg:
 		switch m.state {
 		case viewHelp:
@@ -185,12 +207,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleSettings(msg)
 		case viewKeyInput:
 			return m.handleKeyInput(msg)
+		case viewGeminiMenu:
+			return m.handleGeminiMenu(msg)
+		case viewGeminiCID:
+			return m.handleGeminiCID(msg)
+		case viewGeminiCS:
+			return m.handleGeminiCS(msg)
+		case viewOAuthWait:
+			if msg.String() == "ctrl+c" {
+				return m, tea.Quit
+			}
 		default:
 			return m.handleList(msg)
 		}
 	}
 
-	if m.state == viewAddInput || m.state == viewKeyInput {
+	if m.state == viewAddInput || m.state == viewKeyInput ||
+		m.state == viewGeminiCID || m.state == viewGeminiCS {
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)
 		return m, cmd
@@ -347,18 +380,22 @@ func (m model) handleSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "enter":
 		p := providers[m.settingsCursor]
-		if p.id == ai.ProviderOllama {
-			// Ollama needs no key — just activate.
+		switch p.id {
+		case ai.ProviderOllama:
 			m.cfg.Provider = string(ai.ProviderOllama)
 			config.Save(m.cfg)
 			config.ApplyToEnv(m.cfg)
 			m.state = viewList
 			m.message = "Ollama aktiv (lokal)"
-		} else {
+
+		case ai.ProviderGemini:
+			m.state = viewGeminiMenu
+			m.geminiMenuCursor = 0
+
+		default:
 			m.state = viewKeyInput
 			m.input.Reset()
 			m.input.Placeholder = "API-Key einfügen…"
-			// Pre-fill with existing saved key.
 			existingKey := os.Getenv(p.envKey)
 			if existingKey != "" {
 				m.input.SetValue(existingKey)
@@ -367,6 +404,102 @@ func (m model) handleSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+func (m model) handleGeminiMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+	case "esc", "q":
+		m.state = viewSettings
+	case "j", "down":
+		if m.geminiMenuCursor < 1 {
+			m.geminiMenuCursor++
+		}
+	case "k", "up":
+		if m.geminiMenuCursor > 0 {
+			m.geminiMenuCursor--
+		}
+	case "enter":
+		if m.geminiMenuCursor == 1 {
+			// API Key path — same as other providers
+			m.state = viewKeyInput
+			m.input.Reset()
+			m.input.Placeholder = "Gemini API-Key einfügen…"
+			if k := os.Getenv("GEMINI_API_KEY"); k != "" {
+				m.input.SetValue(k)
+			}
+			m.input.Focus()
+		} else {
+			// Browser Login path
+			if m.cfg.GoogleClientID == "" {
+				// Need to set up OAuth2 client first
+				m.state = viewGeminiCID
+				m.input.Reset()
+				m.input.Placeholder = "Client ID einfügen…"
+				m.input.Focus()
+			} else {
+				// Already have credentials — start login
+				m.state = viewOAuthWait
+				return m, startOAuth(m.cfg.GoogleClientID, m.cfg.GoogleClientSecret)
+			}
+		}
+	}
+	return m, nil
+}
+
+func (m model) handleGeminiCID(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+	case "esc":
+		m.state = viewGeminiMenu
+		return m, nil
+	case "o":
+		go auth.OpenBrowser("https://console.cloud.google.com/apis/credentials")
+		return m, nil
+	case "enter":
+		v := strings.TrimSpace(m.input.Value())
+		if v != "" {
+			m.geminiClientID = v
+			m.state = viewGeminiCS
+			m.input.Reset()
+			m.input.Placeholder = "Client Secret einfügen…"
+			m.input.Focus()
+		}
+		return m, nil
+	}
+	var cmd tea.Cmd
+	m.input, cmd = m.input.Update(msg)
+	return m, cmd
+}
+
+func (m model) handleGeminiCS(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+	case "esc":
+		m.state = viewGeminiCID
+		m.input.Reset()
+		m.input.Placeholder = "Client ID einfügen…"
+		m.input.SetValue(m.geminiClientID)
+		m.input.Focus()
+		return m, nil
+	case "enter":
+		v := strings.TrimSpace(m.input.Value())
+		if v != "" {
+			m.cfg.GoogleClientID = m.geminiClientID
+			m.cfg.GoogleClientSecret = v
+			config.Save(m.cfg)
+			config.ApplyToEnv(m.cfg)
+			m.state = viewOAuthWait
+			return m, startOAuth(m.cfg.GoogleClientID, m.cfg.GoogleClientSecret)
+		}
+		return m, nil
+	}
+	var cmd tea.Cmd
+	m.input, cmd = m.input.Update(msg)
+	return m, cmd
 }
 
 func (m model) handleKeyInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -451,6 +584,14 @@ func (m model) View() string {
 		return m.renderSettings()
 	case viewKeyInput:
 		return m.renderKeyInput()
+	case viewGeminiMenu:
+		return m.renderGeminiMenu()
+	case viewGeminiCID:
+		return m.renderGeminiCID()
+	case viewGeminiCS:
+		return m.renderGeminiCS()
+	case viewOAuthWait:
+		return m.renderOAuthWait()
 	default:
 		return m.renderList()
 	}
@@ -659,6 +800,86 @@ func (m model) renderSuggest() string {
 	return panelStyle.Render(b.String())
 }
 
+func (m model) renderGeminiMenu() string {
+	var b strings.Builder
+	b.WriteString(styleLime.Bold(true).Render("Google Gemini") + "\n\n")
+
+	options := []struct {
+		label string
+		desc  string
+	}{
+		{"Browser Login (Google-Account)", "Kein Key nötig — Login im Browser, Token wird gespeichert"},
+		{"API Key", "Direkter Key von aistudio.google.com"},
+	}
+
+	for i, o := range options {
+		cursor := "  "
+		labelStyle := lipgloss.NewStyle().Foreground(colorMuted)
+		if i == m.geminiMenuCursor {
+			cursor = styleLime.Render("▶ ")
+			labelStyle = lipgloss.NewStyle().Foreground(colorFg)
+		}
+		b.WriteString(cursor + labelStyle.Bold(true).Render(o.label) + "\n")
+		b.WriteString("    " + styleMuted.Render(o.desc) + "\n\n")
+	}
+
+	// Show current status
+	if m.cfg.GoogleRefreshToken != "" {
+		b.WriteString(styleOk.Render("● bereits eingeloggt (OAuth)") + "\n\n")
+	} else if m.cfg.GoogleClientID != "" {
+		b.WriteString(styleMuted.Render("OAuth-App konfiguriert, noch nicht eingeloggt") + "\n\n")
+	}
+
+	b.WriteString(styleMuted.Render("enter auswählen · j/k navigieren · esc zurück"))
+	return panelStyle.Render(b.String())
+}
+
+func (m model) renderGeminiCID() string {
+	var b strings.Builder
+	b.WriteString(styleLime.Bold(true).Render("Google OAuth2 Client einrichten") + "\n")
+	b.WriteString(styleMuted.Render("Einmalig — dauert 2 Minuten") + "\n\n")
+
+	b.WriteString(styleOk.Render("o") + styleMuted.Render("  öffnet console.cloud.google.com/apis/credentials") + "\n\n")
+
+	steps := []string{
+		"Projekt wählen oder neu anlegen",
+		"\"+ Create Credentials\" → \"OAuth 2.0 Client ID\"",
+		"Anwendungstyp: \"Desktop-App\", Name: habctl",
+		"Client ID kopieren (Cmd+C)",
+	}
+	for i, s := range steps {
+		b.WriteString(styleMuted.Render(fmt.Sprintf("  %d. %s", i+1, s)) + "\n")
+	}
+
+	b.WriteString("\n" + styleMuted.Render("Client ID (Cmd+V):") + "\n")
+	b.WriteString("  " + m.input.View() + "\n\n")
+	b.WriteString(styleMuted.Render("enter weiter · o Browser öffnen · esc zurück"))
+	return panelStyle.Render(b.String())
+}
+
+func (m model) renderGeminiCS() string {
+	var b strings.Builder
+	b.WriteString(styleLime.Bold(true).Render("Google OAuth2 Client Secret") + "\n\n")
+	b.WriteString(styleMuted.Render("In Google Cloud Console: gleiche Credentials-Seite\n"+
+		"→ Client Secret kopieren (für Desktop-Apps semi-öffentlich)") + "\n\n")
+	b.WriteString(styleMuted.Render("Client Secret (Cmd+V):") + "\n")
+	b.WriteString("  " + m.input.View() + "\n\n")
+	b.WriteString(styleMuted.Render("enter Browser-Login starten · esc zurück"))
+	return panelStyle.Render(b.String())
+}
+
+func (m model) renderOAuthWait() string {
+	var b strings.Builder
+	b.WriteString(styleLime.Bold(true).Render("Warte auf Google-Login…") + "\n\n")
+	b.WriteString(styleMuted.Render("Browser wurde geöffnet.\n\n"+
+		"1. Mit Google-Account einloggen\n"+
+		"2. habctl Zugriff erlauben\n"+
+		"3. Seite zeigt \"Login erfolgreich\" → fertig\n\n"+
+		"Timeout: 5 Minuten") + "\n")
+	b.WriteString("\n" + styleLime.Render("⠿ ") + styleMuted.Render("warte…"))
+	return panelStyle.Render(b.String())
+}
+
 func (m model) renderAdd() string {
 	var b strings.Builder
 	b.WriteString(styleLime.Bold(true).Render("New habit") + "\n\n")
@@ -811,18 +1032,19 @@ func streakMilestone(n int) string {
 	return ""
 }
 
-func openBrowser(url string) {
-	var cmd string
-	var args []string
-	switch runtime.GOOS {
-	case "darwin":
-		cmd, args = "open", []string{url}
-	case "linux":
-		cmd, args = "xdg-open", []string{url}
-	default:
-		cmd, args = "cmd", []string{"/c", "start", url}
+// startOAuth is a tea.Cmd that blocks until the browser OAuth2 flow completes.
+func startOAuth(clientID, clientSecret string) tea.Cmd {
+	return func() tea.Msg {
+		rt, err := auth.BrowserLogin(clientID, clientSecret)
+		if err != nil {
+			return oauthErrMsg{err}
+		}
+		return oauthSuccessMsg{rt}
 	}
-	exec.Command(cmd, args...).Start()
+}
+
+func openBrowser(url string) {
+	auth.OpenBrowser(url)
 }
 
 func max(a, b int) int {

@@ -16,6 +16,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/aeon022/habctl/internal/auth"
 	anthropic "github.com/anthropics/anthropic-sdk-go"
 	anthropicopt "github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/openai/openai-go"
@@ -113,8 +114,9 @@ func callOpenAICompat(info ProviderInfo, system, prompt string, out func(string)
 	case ProviderOpenAI:
 		opts = append(opts, option.WithAPIKey(os.Getenv("OPENAI_API_KEY")))
 	case ProviderGemini:
+		apiKey := geminiKey()
 		opts = append(opts,
-			option.WithAPIKey(os.Getenv("GEMINI_API_KEY")),
+			option.WithAPIKey(apiKey),
 			option.WithBaseURL("https://generativelanguage.googleapis.com/v1beta/openai/"),
 		)
 	case ProviderOllama:
@@ -158,6 +160,22 @@ func callOpenAICompat(info ProviderInfo, system, prompt string, out func(string)
 		return "", fmt.Errorf("%s: %w", info.Display, friendlyNetErr(err))
 	}
 	return full.String(), nil
+}
+
+// geminiKey returns the best available credential for the Gemini API.
+// If a Google OAuth2 refresh token is configured it exchanges it for an access
+// token (which the Gemini endpoint accepts as a Bearer token). Falls back to
+// the plain GEMINI_API_KEY when no OAuth credentials are present.
+func geminiKey() string {
+	rt := os.Getenv("GOOGLE_REFRESH_TOKEN")
+	clientID := os.Getenv("GOOGLE_CLIENT_ID")
+	clientSecret := os.Getenv("GOOGLE_CLIENT_SECRET")
+	if rt != "" && clientID != "" && clientSecret != "" {
+		if tok, err := auth.GetAccessToken(clientID, clientSecret, rt); err == nil {
+			return tok
+		}
+	}
+	return os.Getenv("GEMINI_API_KEY")
 }
 
 // friendlyNetErr replaces low-level Go network errors with readable messages.

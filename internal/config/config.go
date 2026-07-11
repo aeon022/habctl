@@ -16,6 +16,10 @@ type Config struct {
 	GeminiKey      string `json:"gemini_api_key,omitempty"`
 	OllamaHost     string `json:"ollama_host,omitempty"`
 	OllamaModel    string `json:"ollama_model,omitempty"`
+	// Google OAuth2 credentials (Desktop app from console.cloud.google.com).
+	GoogleClientID     string `json:"google_client_id,omitempty"`
+	GoogleClientSecret string `json:"google_client_secret,omitempty"`
+	GoogleRefreshToken string `json:"google_refresh_token,omitempty"`
 }
 
 func path() (string, error) {
@@ -76,4 +80,7 @@ func ApplyToEnv(cfg Config) {
 	setIfMissing("GEMINI_API_KEY", cfg.GeminiKey)
 	setIfMissing("OLLAMA_HOST", cfg.OllamaHost)
 	setIfMissing("OLLAMA_MODEL", cfg.OllamaModel)
+	setIfMissing("GOOGLE_CLIENT_ID", cfg.GoogleClientID)
+	setIfMissing("GOOGLE_CLIENT_SECRET", cfg.GoogleClientSecret)
+	setIfMissing("GOOGLE_REFRESH_TOKEN", cfg.GoogleRefreshToken)
 }
