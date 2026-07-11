@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/aeon022/habctl/internal/store"
+	"github.com/aeon022/habctl/internal/tui"
 	"github.com/spf13/cobra"
 )
 
@@ -15,9 +16,13 @@ var rootCmd = &cobra.Command{
 
 Track daily habits, view streaks, and build consistency.
 Use subcommands to manage habits from the CLI.`,
-	// Default action: show help.
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return cmd.Help()
+		s, err := openStore()
+		if err != nil {
+			return err
+		}
+		defer s.Close()
+		return tui.Run(s)
 	},
 }
 
