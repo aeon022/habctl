@@ -83,7 +83,11 @@ func detectForced(p Provider) (ProviderInfo, error) {
 	case ProviderOpenAI:
 		return ProviderInfo{ProviderOpenAI, "gpt-4o-mini", "GPT-4o mini (OpenAI)"}, nil
 	case ProviderGemini:
-		return ProviderInfo{ProviderGemini, "gemini-2.0-flash", "Gemini 2.0 Flash (Google)"}, nil
+		model := os.Getenv("GEMINI_MODEL")
+		if model == "" {
+			model = "gemini-1.5-flash"
+		}
+		return ProviderInfo{ProviderGemini, model, "Gemini " + model + " (Google)"}, nil
 	case ProviderOllama:
 		model := "llama3.2"
 		return ProviderInfo{ProviderOllama, model, "Ollama (" + model + ", local)"}, nil

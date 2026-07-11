@@ -14,6 +14,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"reflect"
 	"strings"
 
 	"github.com/aeon022/habctl/internal/auth"
@@ -56,7 +57,11 @@ func Detect() (ProviderInfo, error) {
 		return ProviderInfo{ProviderOpenAI, "gpt-4o-mini", "GPT-4o mini (OpenAI)"}, nil
 	}
 	if check(ProviderGemini) && os.Getenv("GEMINI_API_KEY") != "" {
-		return ProviderInfo{ProviderGemini, "gemini-2.0-flash", "Gemini 2.0 Flash (Google)"}, nil
+		model := os.Getenv("GEMINI_MODEL")
+		if model == "" {
+			model = "gemini-1.5-flash"
+		}
+		return ProviderInfo{ProviderGemini, model, "Gemini " + model + " (Google)"}, nil
 	}
 	if check(ProviderOllama) {
 		model := os.Getenv("OLLAMA_MODEL")
@@ -179,7 +184,16 @@ func geminiKey() string {
 }
 
 // friendlyNetErr replaces low-level Go network errors with readable messages.
+//
+// The openai-go SDK stores the HTTP status in apierror.Error.StatusCode, but
+// that type is in an internal package. When Gemini returns a 429 the SDK's
+// JSON unmarshal fails (Google uses "code":int, OpenAI expects "code":string),
+// so the error text may not contain "429" at all. We therefore check both the
+// error string AND the StatusCode field via reflection.
 func friendlyNetErr(err error) error {
+	if code, ok := httpStatusCode(err); ok {
+		return friendlyForStatus(code, err)
+	}
 	msg := err.Error()
 	switch {
 	case strings.Contains(msg, "lookup") || strings.Contains(msg, "no such host"):
@@ -188,8 +202,10 @@ func friendlyNetErr(err error) error {
 		return fmt.Errorf("Verbindung abgelehnt — API-Server nicht erreichbar")
 	case strings.Contains(msg, "timeout") || strings.Contains(msg, "deadline exceeded"):
 		return fmt.Errorf("Timeout — API-Server antwortet nicht")
-	case strings.Contains(msg, "429") || strings.Contains(msg, "Too Many Requests") || strings.Contains(msg, "rate limit"):
-		return fmt.Errorf("429 Rate Limit — zu viele Anfragen, kurz warten und nochmal versuchen")
+	case strings.Contains(msg, "429") || strings.Contains(msg, "Too Many Requests") ||
+		strings.Contains(msg, "RESOURCE_EXHAUSTED") || strings.Contains(msg, "rate limit") ||
+		strings.Contains(msg, "quota"):
+		return friendlyForStatus(429, err)
 	case strings.Contains(msg, "404"):
 		return fmt.Errorf("404 — API-Endpunkt nicht gefunden. Gemini: Key von aistudio.google.com holen (Google-Login → 'Get API key')")
 	case strings.Contains(msg, "401") || strings.Contains(msg, "Unauthorized"):
@@ -198,6 +214,39 @@ func friendlyNetErr(err error) error {
 		return fmt.Errorf("Zugriff verweigert — API-Key hat keine Berechtigung")
 	}
 	return err
+}
+
+// httpStatusCode extracts the HTTP status code from an error via reflection.
+// The openai-go SDK stores it in apierror.Error.StatusCode (internal package).
+func httpStatusCode(err error) (int, bool) {
+	if err == nil {
+		return 0, false
+	}
+	v := reflect.ValueOf(err)
+	if v.Kind() == reflect.Ptr {
+		v = v.Elem()
+	}
+	if f := v.FieldByName("StatusCode"); f.IsValid() && f.Kind() == reflect.Int {
+		if code := int(f.Int()); code >= 400 {
+			return code, true
+		}
+	}
+	return 0, false
+}
+
+func friendlyForStatus(code int, orig error) error {
+	switch code {
+	case 429:
+		return fmt.Errorf("429 Rate Limit / Quota — Gemini Free Tier: kurz warten oder Modell wechseln. " +
+			"Quota prüfen: aistudio.google.com/u/0/quota")
+	case 404:
+		return fmt.Errorf("404 — API-Endpunkt nicht gefunden. Gemini: Key von aistudio.google.com holen")
+	case 401:
+		return fmt.Errorf("401 — API-Key ungültig. Settings (S) öffnen und Key neu eingeben")
+	case 403:
+		return fmt.Errorf("403 — Zugriff verweigert. API-Key hat keine Berechtigung für dieses Modell")
+	}
+	return orig
 }
 
 // Call dispatches to the correct provider backend.
