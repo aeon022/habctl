@@ -621,18 +621,18 @@ func (m model) handleKeyInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m model) renderSettings() string {
 	lime := styleLime.Bold(true)
-	key := lipgloss.NewStyle().Foreground(colorLime).Width(4)
-	_ = key
 
 	var b strings.Builder
 	b.WriteString(lime.Render("habctl") + "  " + styleMuted.Render("Settings — KI-Provider") + "\n\n")
 
 	for i, p := range providers {
 		cursor := "  "
-		nameStyle := styleMuted
+		var nameStyle lipgloss.Style
 		if i == m.settingsCursor {
 			cursor = styleLime.Render("▶ ")
-			nameStyle = lipgloss.NewStyle().Foreground(colorFg)
+			nameStyle = lipgloss.NewStyle().Foreground(colorFg).Width(36)
+		} else {
+			nameStyle = lipgloss.NewStyle().Foreground(colorMuted).Width(36)
 		}
 
 		var badge string
@@ -644,8 +644,7 @@ func (m model) renderSettings() string {
 			badge = styleWarn.Render("– nicht gesetzt")
 		}
 
-		b.WriteString(fmt.Sprintf("%s%-38s  %s\n",
-			cursor, nameStyle.Render(p.label), badge))
+		b.WriteString(cursor + nameStyle.Render(p.label) + "  " + badge + "\n")
 	}
 
 	b.WriteString("\n")
