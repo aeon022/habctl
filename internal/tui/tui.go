@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"math"
+	"os"
 	"strings"
 	"time"
 
@@ -69,7 +70,11 @@ func Run(s *store.Store) error {
 	ti.CharLimit = 60
 
 	m := model{s: s, input: ti}
-	p := tea.NewProgram(m, tea.WithAltScreen())
+	p := tea.NewProgram(m,
+		tea.WithAltScreen(),
+		tea.WithInput(os.Stdin),
+		tea.WithOutput(os.Stdout),
+	)
 	_, err := p.Run()
 	return err
 }
