@@ -4,13 +4,10 @@ import (
 	"fmt"
 	"math"
 	"os"
-	"os/exec"
-	"runtime"
 	"strings"
 	"time"
 
 	"github.com/aeon022/habctl/internal/ai"
-	"github.com/aeon022/habctl/internal/config"
 	"github.com/aeon022/habctl/internal/models"
 	"github.com/aeon022/habctl/internal/store"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -24,7 +21,7 @@ var (
 	colorLime   = lipgloss.AdaptiveColor{Light: "#65a30d", Dark: "#84cc16"}
 	colorMuted  = lipgloss.AdaptiveColor{Light: "#64748b", Dark: "#718096"}
 	colorOk     = lipgloss.AdaptiveColor{Light: "#16a34a", Dark: "#4ade80"}
-	colorWarn   = lipgloss.AdaptiveColor{Light: "#d97706", Dark: "#fbbf24"} // at-risk amber
+	colorWarn   = lipgloss.AdaptiveColor{Light: "#d97706", Dark: "#fbbf24"}
 	colorFg     = lipgloss.AdaptiveColor{Light: "#1e293b", Dark: "#e2e8f0"}
 	colorBorder = lipgloss.AdaptiveColor{Light: "#cbd5e1", Dark: "#1e1e2e"}
 
@@ -50,11 +47,9 @@ const (
 	viewAddInput
 	viewHelp
 	viewSuggest
-	viewSettings
-	viewKeyInput
 )
 
-// ── streaming suggest ─────────────────────────────────────────────────────────
+// ── messages ─────────────────────────────────────────────────────────────────
 
 type suggestChunkResult struct {
 	text string
@@ -66,28 +61,10 @@ type suggestChunkMsg string
 type suggestDoneMsg struct{}
 type suggestErrMsg struct{ err error }
 
-// ── other messages ────────────────────────────────────────────────────────────
-
 type habitsLoadedMsg []models.HabitStats
 type errMsg struct{ err error }
 type clearMsgMsg struct{}
 type statusMsg string
-
-// ── provider entries (for settings view) ─────────────────────────────────────
-
-type providerEntry struct {
-	id      ai.Provider
-	label   string
-	envKey  string // primary env var name
-	keyURL  string // browser URL for getting the key
-}
-
-var providers = []providerEntry{
-	{ai.ProviderAnthropic, "Anthropic  (Claude Haiku)", "ANTHROPIC_API_KEY", "https://console.anthropic.com/settings/keys"},
-	{ai.ProviderOpenAI, "OpenAI     (ChatGPT / GPT-4o mini)", "OPENAI_API_KEY", "https://platform.openai.com/api-keys"},
-	{ai.ProviderGemini, "Google     (Gemini 2.0 Flash)", "GEMINI_API_KEY", "https://aistudio.google.com/app/apikey"},
-	{ai.ProviderOllama, "Ollama     (lokal, kein Key)", "", "https://ollama.com/download"},
-}
 
 // ── model ────────────────────────────────────────────────────────────────────
 
@@ -103,9 +80,6 @@ type model struct {
 	suggestText string
 	suggestDone bool
 	suggestCh   <-chan suggestChunkResult
-	// settings
-	settingsCursor int
-	cfg            config.Config
 }
 
 // ── entry point ──────────────────────────────────────────────────────────────
@@ -115,8 +89,7 @@ func Run(s *store.Store) error {
 	ti.Placeholder = "Habit name…"
 	ti.CharLimit = 60
 
-	cfg, _ := config.Load()
-	m := model{s: s, input: ti, cfg: cfg}
+	m := model{s: s, input: ti}
 	p := tea.NewProgram(m,
 		tea.WithAltScreen(),
 		tea.WithInput(os.Stdin),
@@ -161,8 +134,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.isErr = false
 		return m, nil
 
-	// ── suggest streaming ────────────────────────────────────────────────────
-
 	case suggestChunkMsg:
 		m.suggestText += string(msg)
 		return m, waitForChunk(m.suggestCh)
@@ -184,10 +155,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleAddInput(msg)
 		case viewSuggest:
 			return m.handleSuggest(msg)
-		case viewSettings:
-			return m.handleSettings(msg)
-		case viewKeyInput:
-			return m.handleKeyInput(msg)
 		default:
 			return m.handleList(msg)
 		}
@@ -255,7 +222,6 @@ func (m model) handleList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.state = viewSuggest
 		m.suggestText = ""
 		m.suggestDone = false
-		s := m.s
 		var existing []string
 		for _, h := range m.habits {
 			existing = append(existing, h.Habit.Name)
@@ -263,23 +229,16 @@ func (m model) handleList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		ch := make(chan suggestChunkResult, 64)
 		m.suggestCh = ch
 		go func() {
-			_, err := ai.Suggest(ai.SuggestRequest{
-				ExistingHabits: existing,
-				Count:          6,
-			}, func(chunk string) {
+			req := ai.SuggestRequest{ExistingHabits: existing, Count: 6}
+			_, err := ai.SuggestOllama(req, func(chunk string) {
 				ch <- suggestChunkResult{text: chunk}
 			})
 			if err != nil {
 				ch <- suggestChunkResult{err: err}
 			}
 			ch <- suggestChunkResult{done: true}
-			_ = s // keep store reference alive
 		}()
 		return m, waitForChunk(m.suggestCh)
-
-	case "S":
-		m.state = viewSettings
-		m.settingsCursor = 0
 
 	case "?":
 		m.state = viewHelp
@@ -367,10 +326,6 @@ func (m model) View() string {
 		return m.renderAdd()
 	case viewSuggest:
 		return m.renderSuggest()
-	case viewSettings:
-		return m.renderSettings()
-	case viewKeyInput:
-		return m.renderKeyInput()
 	default:
 		return m.renderList()
 	}
@@ -459,15 +414,19 @@ func (m model) renderList() string {
 		b.WriteString(msgStyle.Render(m.message) + "\n\n")
 	}
 
-	b.WriteString(styleMuted.Render("space check in · n new · d delete · s suggest · w week/month · S settings · ? help · q quit"))
+	b.WriteString(styleMuted.Render("space check in · n new · d delete · s suggest (Ollama) · w 7d/30d · ? help · q quit"))
 	return panelStyle.Render(b.String())
 }
 
 func (m model) renderSuggest() string {
 	var b strings.Builder
 
-	title := styleLime.Bold(true).Render("KI-Vorschläge")
-	b.WriteString(title + "\n\n")
+	model := os.Getenv("OLLAMA_MODEL")
+	if model == "" {
+		model = "llama3.2"
+	}
+	b.WriteString(styleLime.Bold(true).Render("Habit-Vorschläge") +
+		styleMuted.Render(fmt.Sprintf("  via Ollama (%s)", model)) + "\n\n")
 
 	if m.suggestText == "" {
 		b.WriteString(styleMuted.Render("Generiere Vorschläge…") + "\n")
@@ -476,10 +435,9 @@ func (m model) renderSuggest() string {
 	}
 
 	if m.suggestDone {
-		b.WriteString("\n\n")
-		b.WriteString(styleMuted.Render("n neuen Habit hinzufügen · esc zurück"))
+		b.WriteString("\n\n" + styleMuted.Render("n neuen Habit hinzufügen · esc zurück"))
 	} else {
-		b.WriteString(styleMuted.Render("▌"))
+		b.WriteString(styleLime.Render("▌"))
 	}
 
 	return panelStyle.Render(b.String())
@@ -521,11 +479,10 @@ func (m model) renderHelp() string {
 	b.WriteString(row("space / enter", "check in today"))
 	b.WriteString(row("n", "add new habit"))
 	b.WriteString(row("d", "delete selected habit"))
-	b.WriteString(row("s", "KI-Vorschläge (streaming)"))
-	b.WriteString(row("S", "Settings — API-Keys konfigurieren"))
+	b.WriteString(row("s", "KI-Vorschläge via Ollama (lokal)"))
 
 	b.WriteString(section("View"))
-	b.WriteString(row("w", "toggle week (7d) / month (30d) view"))
+	b.WriteString(row("w", "toggle 7d / 30d view"))
 
 	b.WriteString(section("Status colors"))
 	b.WriteString(row(styleOk.Render("✓  green"), "checked in today"))
@@ -537,135 +494,6 @@ func (m model) renderHelp() string {
 	b.WriteString(row("q / ctrl+c", "quit"))
 
 	b.WriteString("\n  " + styleMuted.Render("esc / ?   close help"))
-
-	return panelStyle.Render(b.String())
-}
-
-func (m model) handleSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "ctrl+c":
-		return m, tea.Quit
-	case "esc", "q":
-		m.state = viewList
-	case "j", "down":
-		if m.settingsCursor < len(providers)-1 {
-			m.settingsCursor++
-		}
-	case "k", "up":
-		if m.settingsCursor > 0 {
-			m.settingsCursor--
-		}
-	case "o":
-		p := providers[m.settingsCursor]
-		_ = openBrowser(p.keyURL)
-	case "enter", " ":
-		p := providers[m.settingsCursor]
-		if p.envKey == "" {
-			// Ollama — just open browser, no key needed.
-			_ = openBrowser(p.keyURL)
-			break
-		}
-		_ = openBrowser(p.keyURL)
-		m.state = viewKeyInput
-		m.input.Reset()
-		m.input.Placeholder = "API-Key einfügen…"
-		m.input.EchoMode = textinput.EchoPassword
-		m.input.EchoCharacter = '•'
-		m.input.CharLimit = 200
-		m.input.Focus()
-	}
-	return m, nil
-}
-
-func (m model) handleKeyInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "esc":
-		m.state = viewSettings
-		return m, nil
-	case "ctrl+r": // toggle show/hide key
-		if m.input.EchoMode == textinput.EchoPassword {
-			m.input.EchoMode = textinput.EchoNormal
-		} else {
-			m.input.EchoMode = textinput.EchoPassword
-		}
-	case "enter":
-		key := strings.TrimSpace(m.input.Value())
-		m.state = viewSettings
-		if key == "" {
-			return m, nil
-		}
-		p := providers[m.settingsCursor]
-		// Save to config and apply to env immediately.
-		switch p.id {
-		case ai.ProviderAnthropic:
-			m.cfg.AnthropicKey = key
-		case ai.ProviderOpenAI:
-			m.cfg.OpenAIKey = key
-		case ai.ProviderGemini:
-			m.cfg.GeminiKey = key
-		}
-		os.Setenv(p.envKey, key)
-		if err := config.Save(m.cfg); err != nil {
-			m.message = "✗ Speichern fehlgeschlagen: " + err.Error()
-			m.isErr = true
-			return m, clearAfter()
-		}
-		m.message = "✓ " + p.label + " gespeichert"
-		m.isErr = false
-		return m, clearAfter()
-	}
-	var cmd tea.Cmd
-	m.input, cmd = m.input.Update(msg)
-	return m, cmd
-}
-
-func (m model) renderSettings() string {
-	lime := styleLime.Bold(true)
-
-	var b strings.Builder
-	b.WriteString(lime.Render("habctl") + "  " + styleMuted.Render("Settings — KI-Provider") + "\n\n")
-
-	for i, p := range providers {
-		cursor := "  "
-		var nameStyle lipgloss.Style
-		if i == m.settingsCursor {
-			cursor = styleLime.Render("▶ ")
-			nameStyle = lipgloss.NewStyle().Foreground(colorFg).Width(36)
-		} else {
-			nameStyle = lipgloss.NewStyle().Foreground(colorMuted).Width(36)
-		}
-
-		var badge string
-		if p.envKey == "" {
-			badge = styleMuted.Render("kein Key nötig")
-		} else if os.Getenv(p.envKey) != "" {
-			badge = styleOk.Render("✓ konfiguriert")
-		} else {
-			badge = styleWarn.Render("– nicht gesetzt")
-		}
-
-		b.WriteString(cursor + nameStyle.Render(p.label) + "  " + badge + "\n")
-	}
-
-	b.WriteString("\n")
-	if m.message != "" {
-		msgStyle := styleOk
-		if m.isErr {
-			msgStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
-		}
-		b.WriteString(msgStyle.Render(m.message) + "\n\n")
-	}
-	b.WriteString(styleMuted.Render("enter: Browser + Key eingeben · o: nur Browser · esc: zurück"))
-	return panelStyle.Render(b.String())
-}
-
-func (m model) renderKeyInput() string {
-	p := providers[m.settingsCursor]
-	var b strings.Builder
-	b.WriteString(styleLime.Bold(true).Render(p.label) + "\n\n")
-	b.WriteString(styleMuted.Render("Browser wurde geöffnet → Key kopieren und hier einfügen:\n\n"))
-	b.WriteString(m.input.View() + "\n\n")
-	b.WriteString(styleMuted.Render("enter speichern · ctrl+r anzeigen/verbergen · esc abbrechen"))
 	return panelStyle.Render(b.String())
 }
 
@@ -744,18 +572,4 @@ func max(a, b int) int {
 		return a
 	}
 	return b
-}
-
-func openBrowser(url string) error {
-	var cmd string
-	switch runtime.GOOS {
-	case "darwin":
-		cmd = "open"
-	case "windows":
-		cmd = "rundll32"
-		return exec.Command(cmd, "url.dll,FileProtocolHandler", url).Start()
-	default:
-		cmd = "xdg-open"
-	}
-	return exec.Command(cmd, url).Start()
 }

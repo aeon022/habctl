@@ -2,6 +2,7 @@ package ai
 
 import (
 	"fmt"
+	"os"
 	"strings"
 )
 
@@ -46,6 +47,17 @@ func SuggestBlocking(req SuggestRequest) (string, error) {
 		return "", err
 	}
 	return Call(info, systemPromptSuggest, buildPrompt(req), nil)
+}
+
+// SuggestOllama streams suggestions from a local Ollama instance, bypassing
+// provider detection entirely. Used by the TUI (no API key required).
+func SuggestOllama(req SuggestRequest, out func(string)) (string, error) {
+	model := os.Getenv("OLLAMA_MODEL")
+	if model == "" {
+		model = "llama3.2"
+	}
+	info := ProviderInfo{ProviderOllama, model, "Ollama (" + model + ", local)"}
+	return Call(info, systemPromptSuggest, buildPrompt(req), out)
 }
 
 // SuggestWithProvider runs against a specific provider (for the --provider flag).
