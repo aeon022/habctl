@@ -16,18 +16,34 @@ type Habit struct {
 	ID          int64
 	Name        string
 	Description string
-	Icon        string // optional emoji shown before name
-	GroupID     int64  // 0 = ungrouped
+	Icon        string
+	GroupID     int64
 	CreatedAt   time.Time
 }
 
-// CheckIn represents a single day's check-in for a habit.
+// CheckIn records that a habit was completed on a specific date.
 type CheckIn struct {
 	ID        int64
 	HabitID   int64
 	HabitName string
 	Date      time.Time
+	Note      string
 	CreatedAt time.Time
+}
+
+// NoteEntry is a lightweight (date, note) pair returned by GetRecentNotes.
+type NoteEntry struct {
+	Date string
+	Note string
+}
+
+// Chain links two habits: completing FromName suggests doing ToName next.
+type Chain struct {
+	ID       int64
+	FromID   int64
+	ToID     int64
+	FromName string
+	ToName   string
 }
 
 // HabitStats aggregates statistics for a habit over a time window.
@@ -39,4 +55,24 @@ type HabitStats struct {
 	LastCheckIn   *time.Time
 	CheckedToday  bool
 	Last7Days     [7]bool // [0] = 6 days ago, [6] = today
+	ChainTo       string  // name of chained follow-up habit (empty if none)
+	TodayNote     string  // note for today's check-in (empty if none)
+}
+
+// HabitWeekData is one habit's contribution to a WeeklyReview.
+type HabitWeekData struct {
+	Name            string
+	Icon            string
+	DoneThisWeek    int
+	DoneLast30      int
+	CompletionPct7  float64 // 0–1
+	CompletionPct30 float64 // 0–1
+	CurrentStreak   int
+	RecentNotes     []NoteEntry // up to 3 most recent notes with text
+}
+
+// WeeklyReview aggregates per-habit data for the AI coaching briefing.
+type WeeklyReview struct {
+	Habits      []HabitWeekData
+	PerfectDays int // days this week where every habit was checked in
 }

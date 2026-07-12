@@ -67,8 +67,8 @@ type viewState int
 
 const (
 	viewList viewState = iota
-	viewAddInput   // step 1: habit name (+ optional emoji prefix)
-	viewAddDesc    // step 2: description (optional)
+	viewAddInput      // step 1: habit name (+ optional emoji prefix)
+	viewAddDesc       // step 2: description (optional)
 	viewHelp
 	viewSuggest
 	viewSettings
@@ -78,6 +78,10 @@ const (
 	viewGroupMgr   // manage groups list
 	viewGroupNew   // create new group (name + icon)
 	viewGroupPick  // assign a habit to a group
+	viewReview     // weekly AI coaching briefing
+	viewNoteInput  // add/edit note for today's check-in
+	viewChainMgr   // manage habit chains
+	viewChainPick  // pick target habit when creating a chain
 	viewGeminiMenu
 	viewGeminiCID
 	viewGeminiCS
@@ -110,11 +114,28 @@ type suggestItem struct {
 	selected bool
 }
 
+type reviewChunkResult struct {
+	text string
+	done bool
+	err  error
+	gen  int
+}
+type reviewChunkMsg struct {
+	text string
+	gen  int
+}
+type reviewDoneMsg struct{ gen int }
+type reviewErrMsg struct {
+	err error
+	gen int
+}
+
 type oauthSuccessMsg struct{ refreshToken string }
 type oauthErrMsg struct{ err error }
 
 type habitsLoadedMsg []models.HabitStats
 type groupsLoadedMsg []models.Group
+type chainsLoadedMsg []models.Chain
 type errMsg struct{ err error }
 type clearMsgMsg struct{}
 type statusMsg string
@@ -124,6 +145,7 @@ type statusMsg string
 type model struct {
 	habits   []models.HabitStats
 	groups   []models.Group
+	chains   []models.Chain
 	cursor   int
 	state    viewState
 	input    textinput.Model
@@ -136,28 +158,43 @@ type model struct {
 	suggestDone   bool
 	suggestCh     <-chan suggestChunkResult
 	suggestGen    int
-	suggestCancel context.CancelFunc // cancels the inflight HTTP request
+	suggestCancel context.CancelFunc
 	suggestItems  []suggestItem
 	suggestCursor int
+
+	// weekly review (AI briefing)
+	reviewText   string
+	reviewDone   bool
+	reviewCh     <-chan reviewChunkResult
+	reviewGen    int
+	reviewCancel context.CancelFunc
 
 	settingsCursor   int
 	geminiMenuCursor int
 	geminiClientID   string
 
 	// add-habit flow
-	addingName string // temp: name entered in viewAddInput
-	addingIcon string // temp: parsed icon
+	addingName string
+	addingIcon string
 
 	// edit-habit flow
-	editCursor   int    // 0=name+icon, 1=description
-	editOldName  string // original name before edit
+	editCursor  int
+	editOldName string
 
 	// group management
 	groupCursor int
 
+	// chain management
+	chainCursor     int // cursor in viewChainMgr
+	chainPickCursor int // cursor in viewChainPick
+	chainFromName   string // habit name selected as chain source
+
+	// note flow: add note to today's check-in
+	noteForHabit string // habit name the note belongs to
+
 	cfg     config.Config
 	calData store.CalendarData
-	width   int // terminal width from tea.WindowSizeMsg
+	width   int
 }
 
 // ── entry point ──────────────────────────────────────────────────────────────
@@ -177,7 +214,7 @@ func Run(s *store.Store) error {
 // ── bubbletea interface ───────────────────────────────────────────────────────
 
 func (m model) Init() tea.Cmd {
-	return tea.Batch(loadHabits(m.s, 30), loadGroups(m.s))
+	return tea.Batch(loadHabits(m.s, 30), loadGroups(m.s), loadChains(m.s))
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -198,6 +235,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.groups = []models.Group(msg)
 		return m, nil
 
+	case chainsLoadedMsg:
+		m.chains = []models.Chain(msg)
+		return m, nil
+
 	case statusMsg:
 		m.message = string(msg)
 		m.isErr = false
@@ -205,7 +246,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.weekView {
 			days = 7
 		}
-		return m, tea.Batch(loadHabits(m.s, days), loadGroups(m.s), clearAfter())
+		return m, tea.Batch(loadHabits(m.s, days), loadGroups(m.s), loadChains(m.s), clearAfter())
 
 	case errMsg:
 		m.message = "✗ " + msg.err.Error()
@@ -235,6 +276,25 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.gen == m.suggestGen {
 			m.suggestDone = true
 			m.suggestText += "\n\n✗ " + msg.err.Error()
+		}
+		return m, nil
+
+	case reviewChunkMsg:
+		if msg.gen == m.reviewGen {
+			m.reviewText += msg.text
+		}
+		return m, waitForReviewChunk(m.reviewCh)
+
+	case reviewDoneMsg:
+		if msg.gen == m.reviewGen {
+			m.reviewDone = true
+		}
+		return m, nil
+
+	case reviewErrMsg:
+		if msg.gen == m.reviewGen {
+			m.reviewDone = true
+			m.reviewText += "\n\n✗ " + msg.err.Error()
 		}
 		return m, nil
 
@@ -276,6 +336,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleGroupNew(msg)
 		case viewGroupPick:
 			return m.handleGroupPick(msg)
+		case viewReview:
+			return m.handleReview(msg)
+		case viewNoteInput:
+			return m.handleNoteInput(msg)
+		case viewChainMgr:
+			return m.handleChainMgr(msg)
+		case viewChainPick:
+			return m.handleChainPick(msg)
 		case viewGeminiMenu:
 			return m.handleGeminiMenu(msg)
 		case viewGeminiCID:
@@ -294,7 +362,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.state == viewAddInput || m.state == viewAddDesc ||
 		m.state == viewKeyInput || m.state == viewEditHabit ||
 		m.state == viewGeminiCID || m.state == viewGeminiCS ||
-		m.state == viewGroupNew {
+		m.state == viewGroupNew || m.state == viewNoteInput {
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)
 		return m, cmd
@@ -353,7 +421,6 @@ func (m model) handleList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, loadHabits(m.s, days)
 
 	case "s":
-		// Cancel any previous inflight request before starting a new one.
 		if m.suggestCancel != nil {
 			m.suggestCancel()
 		}
@@ -363,9 +430,17 @@ func (m model) handleList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.suggestItems = nil
 		m.suggestCursor = 0
 		m.suggestGen++
-		var existing []string
+		existing := make([]string, 0, len(m.habits))
+		rates := make(map[string]float64, len(m.habits))
 		for _, h := range m.habits {
 			existing = append(existing, h.Habit.Name)
+			done := 0
+			for _, v := range h.Last7Days {
+				if v {
+					done++
+				}
+			}
+			rates[h.Habit.Name] = float64(done) / 7.0
 		}
 		ch := make(chan suggestChunkResult, 64)
 		m.suggestCh = ch
@@ -374,9 +449,8 @@ func (m model) handleList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.suggestCancel = cancel
 		go func() {
 			defer cancel()
-			req := ai.SuggestRequest{ExistingHabits: existing, Count: 3}
+			req := ai.SuggestRequest{ExistingHabits: existing, CompletionRates: rates, Count: 3}
 			_, err := ai.Suggest(ctx, req, func(chunk string) {
-				// Use select so a cancelled ctx unblocks a full channel immediately.
 				select {
 				case ch <- suggestChunkResult{text: chunk, gen: gen}:
 				case <-ctx.Done():
@@ -384,7 +458,7 @@ func (m model) handleList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			})
 			if err != nil {
 				if ctx.Err() != nil {
-					return // cancelled — don't surface as error
+					return
 				}
 				select {
 				case ch <- suggestChunkResult{err: err, gen: gen}:
@@ -398,6 +472,74 @@ func (m model) handleList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}()
 		return m, waitForChunk(m.suggestCh)
+
+	case "r":
+		if m.reviewCancel != nil {
+			m.reviewCancel()
+		}
+		m.state = viewReview
+		m.reviewText = ""
+		m.reviewDone = false
+		m.reviewGen++
+		rch := make(chan reviewChunkResult, 64)
+		m.reviewCh = rch
+		gen := m.reviewGen
+		ctx, cancel := context.WithCancel(context.Background())
+		m.reviewCancel = cancel
+		s := m.s
+		go func() {
+			defer cancel()
+			data, err := s.GetWeeklyReview()
+			if err != nil {
+				select {
+				case rch <- reviewChunkResult{err: err, gen: gen}:
+				case <-ctx.Done():
+				}
+				return
+			}
+			_, err = ai.Review(ctx, data, func(chunk string) {
+				select {
+				case rch <- reviewChunkResult{text: chunk, gen: gen}:
+				case <-ctx.Done():
+				}
+			})
+			if err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				select {
+				case rch <- reviewChunkResult{err: err, gen: gen}:
+				case <-ctx.Done():
+				}
+				return
+			}
+			select {
+			case rch <- reviewChunkResult{done: true, gen: gen}:
+			case <-ctx.Done():
+			}
+		}()
+		return m, waitForReviewChunk(m.reviewCh)
+
+	case "N":
+		if len(m.habits) == 0 {
+			break
+		}
+		h := m.habits[m.cursor]
+		if !h.CheckedToday {
+			break // can only add note if already checked in today
+		}
+		m.noteForHabit = h.Habit.Name
+		m.state = viewNoteInput
+		m.input.Reset()
+		m.input.SetValue(h.TodayNote)
+		m.input.CursorEnd()
+		m.input.Placeholder = "Notiz für heute…"
+		m.input.CharLimit = 200
+		m.input.Focus()
+
+	case "c":
+		m.state = viewChainMgr
+		m.chainCursor = 0
 
 	case "t":
 		cal, err := m.s.GetCalendarData(26)
@@ -712,6 +854,171 @@ func (m model) handleGroupPick(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m model) handleReview(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+	case "esc", "q":
+		if m.reviewCancel != nil {
+			m.reviewCancel()
+		}
+		m.state = viewList
+	}
+	return m, nil
+}
+
+func (m model) handleNoteInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+	case "esc":
+		m.state = viewList
+		return m, nil
+	case "enter":
+		note := strings.TrimSpace(m.input.Value())
+		name := m.noteForHabit
+		s := m.s
+		m.state = viewList
+		return m, func() tea.Msg {
+			if err := s.CheckInWithNote(name, time.Now(), note); err != nil {
+				return errMsg{err}
+			}
+			if note != "" {
+				return statusMsg("Notiz gespeichert für " + name)
+			}
+			return statusMsg("Notiz gelöscht für " + name)
+		}
+	}
+	var cmd tea.Cmd
+	m.input, cmd = m.input.Update(msg)
+	return m, cmd
+}
+
+func (m model) handleChainMgr(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+	case "esc", "q":
+		m.state = viewList
+	case "j", "down":
+		if m.chainCursor < len(m.chains)-1 {
+			m.chainCursor++
+		}
+	case "k", "up":
+		if m.chainCursor > 0 {
+			m.chainCursor--
+		}
+	case "a":
+		if len(m.habits) < 2 {
+			break
+		}
+		m.chainFromName = ""
+		m.chainPickCursor = 0
+		m.state = viewChainPick
+	case "d":
+		if len(m.chains) == 0 {
+			break
+		}
+		ch := m.chains[m.chainCursor]
+		s := m.s
+		return m, func() tea.Msg {
+			if err := s.DeleteChain(ch.ID); err != nil {
+				return errMsg{err}
+			}
+			return statusMsg("Kette gelöscht")
+		}
+	case "s":
+		// AI chain suggestions
+		if m.suggestCancel != nil {
+			m.suggestCancel()
+		}
+		habits := make([]string, 0, len(m.habits))
+		for _, h := range m.habits {
+			name := h.Habit.Name
+			if h.Habit.Icon != "" {
+				name = h.Habit.Icon + " " + name
+			}
+			habits = append(habits, name)
+		}
+		m.state = viewSuggest
+		m.suggestText = ""
+		m.suggestDone = false
+		m.suggestItems = nil
+		m.suggestCursor = 0
+		m.suggestGen++
+		rch := make(chan suggestChunkResult, 64)
+		m.suggestCh = rch
+		gen := m.suggestGen
+		ctx, cancel := context.WithCancel(context.Background())
+		m.suggestCancel = cancel
+		go func() {
+			defer cancel()
+			_, err := ai.SuggestChains(ctx, habits, func(chunk string) {
+				select {
+				case rch <- suggestChunkResult{text: chunk, gen: gen}:
+				case <-ctx.Done():
+				}
+			})
+			if err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				select {
+				case rch <- suggestChunkResult{err: err, gen: gen}:
+				case <-ctx.Done():
+				}
+				return
+			}
+			select {
+			case rch <- suggestChunkResult{done: true, gen: gen}:
+			case <-ctx.Done():
+			}
+		}()
+		return m, waitForChunk(m.suggestCh)
+	}
+	return m, nil
+}
+
+func (m model) handleChainPick(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+	case "esc":
+		m.state = viewChainMgr
+	case "j", "down":
+		if m.chainPickCursor < len(m.habits)-1 {
+			m.chainPickCursor++
+		}
+	case "k", "up":
+		if m.chainPickCursor > 0 {
+			m.chainPickCursor--
+		}
+	case "enter":
+		if len(m.habits) == 0 {
+			break
+		}
+		picked := m.habits[m.chainPickCursor].Habit.Name
+		if m.chainFromName == "" {
+			// first pick: set source habit
+			m.chainFromName = picked
+			m.chainPickCursor = 0
+			return m, nil
+		}
+		// second pick: create chain
+		from := m.chainFromName
+		to := picked
+		s := m.s
+		m.state = viewChainMgr
+		return m, func() tea.Msg {
+			if err := s.AddChain(from, to); err != nil {
+				return errMsg{err}
+			}
+			return statusMsg("Kette erstellt: " + from + " → " + to)
+		}
+	}
+	return m, nil
+}
+
 func (m model) handleHelp(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
@@ -1018,6 +1325,14 @@ func (m model) View() string {
 		return m.renderGroupNew()
 	case viewGroupPick:
 		return m.renderGroupPick()
+	case viewReview:
+		return m.renderReview()
+	case viewNoteInput:
+		return m.renderNoteInput()
+	case viewChainMgr:
+		return m.renderChainMgr()
+	case viewChainPick:
+		return m.renderChainPick()
 	case viewGeminiMenu:
 		return m.renderGeminiMenu()
 	case viewGeminiCID:
@@ -1241,10 +1556,15 @@ func (m model) renderList() string {
 
 			b.WriteString(cb + nameCol + skCol + "\n")
 
+			maxSubW := innerW - 4 - 3
 			if h.Habit.Description != "" {
-				maxDescW := innerW - 4 - 3
-				desc := truncate(h.Habit.Description, maxDescW)
-				b.WriteString("    " + styleMuted.Render("// "+desc) + "\n")
+				b.WriteString("    " + styleMuted.Render("// "+truncate(h.Habit.Description, maxSubW)) + "\n")
+			}
+			if h.TodayNote != "" {
+				b.WriteString("    " + styleMuted.Render("📝 "+truncate(h.TodayNote, maxSubW)) + "\n")
+			}
+			if h.ChainTo != "" {
+				b.WriteString("    " + styleMuted.Render("→ "+h.ChainTo) + "\n")
 			}
 		}
 	}
@@ -1259,7 +1579,7 @@ func (m model) renderList() string {
 	}
 
 	b.WriteString(styleMuted.Render(
-		"space ✓ · n neu · e edit · E note · m gruppe · G gruppen · s KI · t stats · S setup · ? help · q quit"))
+		"space ✓ · N notiz · n neu · e edit · m gruppe · c ketten · s KI · r review · t stats · ? help · q quit"))
 	return panelStyle.Render(b.String())
 }
 
@@ -1857,16 +2177,19 @@ func (m model) renderHelp() string {
 	b.WriteString(row("k / ↑", "move up"))
 	b.WriteString(section("Habits"))
 	b.WriteString(row("space / enter", "check in today"))
-	b.WriteString(row("n", "add new habit (+ optional emoji prefix)"))
-	b.WriteString(row("e", "edit name + icon of selected habit"))
-	b.WriteString(row("E", "edit description/note"))
-	b.WriteString(row("d", "delete selected habit"))
+	b.WriteString(row("N", "Notiz zu heutigem Check-in hinzufügen"))
+	b.WriteString(row("n", "neuen Habit anlegen (+ optionales Emoji)"))
+	b.WriteString(row("e", "Name + Icon bearbeiten"))
+	b.WriteString(row("E", "Beschreibung bearbeiten"))
+	b.WriteString(row("d", "Habit löschen"))
 	b.WriteString(section("Gruppen"))
-	b.WriteString(row("m", "habit in Gruppe verschieben"))
+	b.WriteString(row("m", "Habit in Gruppe verschieben"))
 	b.WriteString(row("G", "Gruppen verwalten (add, delete)"))
 	b.WriteString(section("Views"))
-	b.WriteString(row("s", "KI-Vorschläge (aktiver Provider)"))
+	b.WriteString(row("s", "KI-Vorschläge (kontextbewusst)"))
+	b.WriteString(row("r", "KI-Wochenreview — Coaching-Briefing"))
 	b.WriteString(row("t", "Statistiken — Heatmap & Completion"))
+	b.WriteString(row("c", "Habit-Ketten verwalten"))
 	b.WriteString(row("S", "Settings — Provider & API-Keys"))
 	b.WriteString(row("w", "toggle 7d / 30d streak window"))
 	b.WriteString(section("Status"))
@@ -1877,6 +2200,107 @@ func (m model) renderHelp() string {
 	b.WriteString(row("?", "toggle this help screen"))
 	b.WriteString(row("q / ctrl+c", "quit"))
 	b.WriteString("\n  " + styleMuted.Render("esc / ?   close help"))
+	return panelStyle.Render(b.String())
+}
+
+// ── renderReview ──────────────────────────────────────────────────────────────
+
+func (m model) renderReview() string {
+	var b strings.Builder
+	providerLabel := ""
+	if info, err := ai.Detect(); err == nil {
+		providerLabel = styleMuted.Render("via " + info.Display)
+	} else {
+		providerLabel = styleWarn.Render("kein Provider — S für Settings")
+	}
+	b.WriteString(styleLime.Bold(true).Render("Wochenreview") + "  " + providerLabel + "\n\n")
+
+	if m.reviewText != "" {
+		for _, line := range strings.Split(m.reviewText, "\n") {
+			if strings.HasPrefix(line, "## ") {
+				b.WriteString("\n" + styleLime.Bold(true).Render(strings.TrimPrefix(line, "## ")) + "\n")
+			} else {
+				b.WriteString(styleMuted.Render(line) + "\n")
+			}
+		}
+		if !m.reviewDone {
+			b.WriteString(styleLime.Render("▌"))
+		}
+	} else if !m.reviewDone {
+		b.WriteString(styleMuted.Render("Analysiere letzte Woche…") + "\n\n")
+		b.WriteString(styleLime.Render("▌"))
+	}
+
+	b.WriteString("\n\n" + styleMuted.Render("esc zurück · r nochmal"))
+	return panelStyle.Render(b.String())
+}
+
+// ── renderNoteInput ───────────────────────────────────────────────────────────
+
+func (m model) renderNoteInput() string {
+	var b strings.Builder
+	b.WriteString(styleLime.Bold(true).Render("Notiz") + styleMuted.Render(" für "+m.noteForHabit) + "\n\n")
+	b.WriteString("  " + m.input.View() + "\n\n")
+	b.WriteString(styleMuted.Render("enter speichern · esc abbrechen"))
+	return panelStyle.Render(b.String())
+}
+
+// ── renderChainMgr ────────────────────────────────────────────────────────────
+
+func (m model) renderChainMgr() string {
+	var b strings.Builder
+	b.WriteString(styleLime.Bold(true).Render("Habit-Ketten") + "\n")
+	b.WriteString(styleMuted.Render("Nach Habit A kommt direkt Habit B.") + "\n\n")
+
+	if len(m.chains) == 0 {
+		b.WriteString(styleMuted.Render("Noch keine Ketten. a anlegen, s KI-Vorschläge.") + "\n")
+	} else {
+		for i, ch := range m.chains {
+			cursor := "  "
+			style := styleMuted
+			if i == m.chainCursor {
+				cursor = styleLime.Render("▶ ")
+				style = styleFg
+			}
+			b.WriteString(cursor + style.Render(ch.FromName) + styleMuted.Render(" → ") + style.Render(ch.ToName) + "\n")
+		}
+	}
+
+	b.WriteString("\n" + styleMuted.Render("a anlegen · d löschen · s KI-Vorschläge · esc zurück"))
+	return panelStyle.Render(b.String())
+}
+
+// ── renderChainPick ───────────────────────────────────────────────────────────
+
+func (m model) renderChainPick() string {
+	var b strings.Builder
+	if m.chainFromName == "" {
+		b.WriteString(styleLime.Bold(true).Render("Kette anlegen") + "\n")
+		b.WriteString(styleMuted.Render("Schritt 1: Welcher Habit kommt zuerst?") + "\n\n")
+	} else {
+		b.WriteString(styleLime.Bold(true).Render("Kette anlegen") + "\n")
+		b.WriteString(styleMuted.Render("Schritt 2: Welcher Habit folgt auf ") +
+			styleLime.Render(m.chainFromName) + styleMuted.Render("?") + "\n\n")
+	}
+
+	for i, h := range m.habits {
+		cursor := "  "
+		style := styleMuted
+		if i == m.chainPickCursor {
+			cursor = styleLime.Render("▶ ")
+			style = styleFg
+		}
+		name := h.Habit.Name
+		if h.Habit.Icon != "" {
+			name = h.Habit.Icon + " " + name
+		}
+		if name == m.chainFromName {
+			style = styleMuted // can't pick the same one
+		}
+		b.WriteString(cursor + style.Render(name) + "\n")
+	}
+
+	b.WriteString("\n" + styleMuted.Render("enter auswählen · esc zurück"))
 	return panelStyle.Render(b.String())
 }
 
@@ -1899,6 +2323,30 @@ func loadGroups(s *store.Store) tea.Cmd {
 			return errMsg{err}
 		}
 		return groupsLoadedMsg(gs)
+	}
+}
+
+func loadChains(s *store.Store) tea.Cmd {
+	return func() tea.Msg {
+		cs, err := s.ListChains()
+		if err != nil {
+			return errMsg{err}
+		}
+		return chainsLoadedMsg(cs)
+	}
+}
+
+func waitForReviewChunk(ch <-chan reviewChunkResult) tea.Cmd {
+	return func() tea.Msg {
+		r := <-ch
+		switch {
+		case r.err != nil:
+			return reviewErrMsg{r.err, r.gen}
+		case r.done:
+			return reviewDoneMsg{r.gen}
+		default:
+			return reviewChunkMsg{r.text, r.gen}
+		}
 	}
 }
 

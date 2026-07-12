@@ -46,6 +46,7 @@ func init() {
 		todayCmd,
 		remindCmd,
 		suggestCmd,
+		reviewCmd,
 	)
 }
 

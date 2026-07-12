@@ -100,6 +100,13 @@ func (s *Store) runMigrations() error {
 			created_at TEXT NOT NULL DEFAULT (datetime('now'))
 		)`},
 		{3, `ALTER TABLE habits ADD COLUMN group_id INTEGER REFERENCES groups(id) ON DELETE SET NULL`},
+		{4, `ALTER TABLE checkins ADD COLUMN note TEXT NOT NULL DEFAULT ''`},
+		{5, `CREATE TABLE IF NOT EXISTS habit_chains (
+			id      INTEGER PRIMARY KEY AUTOINCREMENT,
+			from_id INTEGER NOT NULL REFERENCES habits(id) ON DELETE CASCADE,
+			to_id   INTEGER NOT NULL REFERENCES habits(id) ON DELETE CASCADE,
+			UNIQUE(from_id, to_id)
+		)`},
 	}
 	for _, m := range migrations {
 		var n int
@@ -190,8 +197,13 @@ func (s *Store) ListHabits() ([]models.Habit, error) {
 
 // ── check-ins ────────────────────────────────────────────────────────────────
 
-// CheckIn records a check-in for the named habit on the given date.
+// CheckIn records a check-in for the named habit on the given date (no note).
 func (s *Store) CheckIn(name string, date time.Time) error {
+	return s.CheckInWithNote(name, date, "")
+}
+
+// CheckInWithNote records a check-in and attaches an optional coaching note.
+func (s *Store) CheckInWithNote(name string, date time.Time, note string) error {
 	var habitID int64
 	err := s.db.QueryRow(`SELECT id FROM habits WHERE name = ?`, name).Scan(&habitID)
 	if err != nil {
@@ -200,10 +212,34 @@ func (s *Store) CheckIn(name string, date time.Time) error {
 	dateStr := date.Format(dateLayout)
 	now := time.Now()
 	_, err = s.db.Exec(
-		`INSERT OR IGNORE INTO checkins (habit_id, date, created_at) VALUES (?, ?, ?)`,
-		habitID, dateStr, now.Format(tsLayout),
+		`INSERT INTO checkins (habit_id, date, note, created_at) VALUES (?, ?, ?, ?)
+		 ON CONFLICT(habit_id, date) DO UPDATE SET note = excluded.note`,
+		habitID, dateStr, note, now.Format(tsLayout),
 	)
 	return err
+}
+
+// GetRecentNotes returns up to limit non-empty notes for a habit, newest first.
+func (s *Store) GetRecentNotes(habitName string, limit int) ([]models.NoteEntry, error) {
+	rows, err := s.db.Query(`
+		SELECT c.date, c.note FROM checkins c
+		JOIN habits h ON h.id = c.habit_id
+		WHERE h.name = ? AND c.note != ''
+		ORDER BY c.date DESC LIMIT ?
+	`, habitName, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []models.NoteEntry
+	for rows.Next() {
+		var e models.NoteEntry
+		if err := rows.Scan(&e.Date, &e.Note); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
 }
 
 // ── stats ────────────────────────────────────────────────────────────────────
@@ -323,6 +359,20 @@ func (s *Store) computeStats(h models.Habit, days int) (models.HabitStats, error
 		last7[i] = dateSet[d.Format(dateLayout)]
 	}
 
+	// today's note (empty string if none or not checked in)
+	var todayNote string
+	s.db.QueryRow(
+		`SELECT note FROM checkins WHERE habit_id = ? AND date = ?`, h.ID, todayStr,
+	).Scan(&todayNote)
+
+	// chain: find the first chained follow-up habit name
+	var chainTo string
+	s.db.QueryRow(`
+		SELECT h2.name FROM habit_chains ch
+		JOIN habits h2 ON h2.id = ch.to_id
+		WHERE ch.from_id = ? LIMIT 1
+	`, h.ID).Scan(&chainTo)
+
 	return models.HabitStats{
 		Habit:         h,
 		Streak:        streak,
@@ -331,6 +381,8 @@ func (s *Store) computeStats(h models.Habit, days int) (models.HabitStats, error
 		LastCheckIn:   lastCheckIn,
 		CheckedToday:  dateSet[todayStr],
 		Last7Days:     last7,
+		ChainTo:       chainTo,
+		TodayNote:     todayNote,
 	}, nil
 }
 
@@ -417,6 +469,115 @@ func (s *Store) ListGroups() ([]models.Group, error) {
 func (s *Store) DeleteGroup(id int64) error {
 	_, err := s.db.Exec(`DELETE FROM groups WHERE id = ?`, id)
 	return err
+}
+
+// ── chains ───────────────────────────────────────────────────────────────────
+
+// AddChain creates a from→to habit chain.
+func (s *Store) AddChain(fromName, toName string) error {
+	var fromID, toID int64
+	if err := s.db.QueryRow(`SELECT id FROM habits WHERE name = ?`, fromName).Scan(&fromID); err != nil {
+		return fmt.Errorf("habit %q not found", fromName)
+	}
+	if err := s.db.QueryRow(`SELECT id FROM habits WHERE name = ?`, toName).Scan(&toID); err != nil {
+		return fmt.Errorf("habit %q not found", toName)
+	}
+	if fromID == toID {
+		return fmt.Errorf("ein Habit kann nicht auf sich selbst zeigen")
+	}
+	_, err := s.db.Exec(`INSERT OR IGNORE INTO habit_chains (from_id, to_id) VALUES (?, ?)`, fromID, toID)
+	return err
+}
+
+// ListChains returns all chains with resolved habit names.
+func (s *Store) ListChains() ([]models.Chain, error) {
+	rows, err := s.db.Query(`
+		SELECT ch.id, ch.from_id, ch.to_id, h1.name, h2.name
+		FROM habit_chains ch
+		JOIN habits h1 ON h1.id = ch.from_id
+		JOIN habits h2 ON h2.id = ch.to_id
+		ORDER BY h1.name, h2.name
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []models.Chain
+	for rows.Next() {
+		var c models.Chain
+		if err := rows.Scan(&c.ID, &c.FromID, &c.ToID, &c.FromName, &c.ToName); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// DeleteChain removes a chain by ID.
+func (s *Store) DeleteChain(id int64) error {
+	_, err := s.db.Exec(`DELETE FROM habit_chains WHERE id = ?`, id)
+	return err
+}
+
+// ── weekly review ─────────────────────────────────────────────────────────────
+
+// GetWeeklyReview aggregates per-habit stats for the AI coaching briefing.
+func (s *Store) GetWeeklyReview() (models.WeeklyReview, error) {
+	habits, err := s.ListHabits()
+	if err != nil {
+		return models.WeeklyReview{}, err
+	}
+	today := truncateToDay(time.Now())
+
+	// count perfect days this week (all habits checked in)
+	total := len(habits)
+	perfectDays := 0
+	if total > 0 {
+		for i := 0; i < 7; i++ {
+			d := today.AddDate(0, 0, i-6).Format(dateLayout)
+			var cnt int
+			s.db.QueryRow(
+				`SELECT COUNT(DISTINCT habit_id) FROM checkins WHERE date = ?`, d,
+			).Scan(&cnt)
+			if cnt >= total {
+				perfectDays++
+			}
+		}
+	}
+
+	var habitData []models.HabitWeekData
+	for _, h := range habits {
+		st, err := s.computeStats(h, 30)
+		if err != nil {
+			continue
+		}
+		done7 := 0
+		for _, v := range st.Last7Days {
+			if v {
+				done7++
+			}
+		}
+		pct7 := 0.0
+		if done7 > 0 {
+			pct7 = float64(done7) / 7.0
+		}
+		pct30 := 0.0
+		if st.TotalDays > 0 {
+			pct30 = float64(st.TotalDays) / 30.0
+		}
+		notes, _ := s.GetRecentNotes(h.Name, 3)
+		habitData = append(habitData, models.HabitWeekData{
+			Name:            h.Name,
+			Icon:            h.Icon,
+			DoneThisWeek:    done7,
+			DoneLast30:      st.TotalDays,
+			CompletionPct7:  pct7,
+			CompletionPct30: pct30,
+			CurrentStreak:   st.Streak,
+			RecentNotes:     notes,
+		})
+	}
+	return models.WeeklyReview{Habits: habitData, PerfectDays: perfectDays}, nil
 }
 
 // ── util ─────────────────────────────────────────────────────────────────────

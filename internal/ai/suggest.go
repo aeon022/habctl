@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/aeon022/habctl/internal/models"
 )
 
 const systemPromptSuggest = `Du bist ein Habit-Coach. Antworte auf Deutsch.
@@ -22,20 +24,60 @@ Tipp: [ein praktischer Einstiegstipp]
 Die App parst dieses Format maschinell. Abweichungen brechen das Parsing.
 Regeln: Emoji direkt vor dem Namen · Zeitaufwand realistisch · keine Überschneidungen mit bestehenden Habits`
 
+const systemPromptReview = `Du bist ein persönlicher Habit-Coach. Antworte auf Deutsch. Sei direkt, konkret und ermutigend.
+
+Analysiere die Habit-Daten der letzten Woche und schreibe ein kurzes Coaching-Briefing.
+Struktur (nutze exakt diese Abschnitte):
+
+## Wochenüberblick
+1-2 Sätze: Was lief gut, wie war die Gesamtkompletionsrate.
+
+## Top-Habits dieser Woche
+Max. 2 Habits die herausragten (hohe Completion oder langer Streak).
+
+## Kämpft gerade
+Max. 2 Habits mit niedriger Completion (<50%). Sei ehrlich aber nicht entmutigend.
+
+## Empfehlung
+Eine konkrete, umsetzbare Empfehlung für die nächste Woche. Falls ein Habit <40% hat: schlage vor, die Frequenz zu reduzieren (z.B. von täglich auf 4x/Woche). Falls Habits thematisch zusammenpassen, erwähne eine mögliche Habit-Kette ("nach X → Y").
+
+## Tipp der Woche
+Ein kurzer, prägnanter Habit-Coaching-Tipp (1-2 Sätze).
+
+Keine Einleitung, keine Schlussworte außer dem Briefing selbst. Kein Markdown-Fettdruck in den Abschnittsnamen selbst.`
+
+const systemPromptChains = `Du bist ein Habit-Coach. Antworte auf Deutsch.
+
+Analysiere die gegebenen Habits und schlage sinnvolle Habit-Ketten vor.
+Eine Habit-Kette bedeutet: Wenn jemand Habit A erledigt, soll er direkt danach Habit B machen.
+
+Gib die Vorschläge in EXAKT diesem Format — kein Text davor oder danach:
+
+###
+Von: [Habit-Name]
+Zu: [Habit-Name]
+Warum: [1 Satz Begründung warum diese Sequenz Sinn ergibt]
+###
+
+Regeln:
+- Nur Habits aus der gegebenen Liste verwenden (exakte Namen)
+- Natürliche Sequenzen bevorzugen (zeitlich, thematisch, energetisch)
+- Max. 3 Vorschläge
+- Keine Ketten vorschlagen wenn die Habits keine sinnvolle Verbindung haben`
+
 // ErrNoAPIKey is returned when no provider key is configured.
 var ErrNoAPIKey = fmt.Errorf("kein API-Key gefunden — setze ANTHROPIC_API_KEY, OPENAI_API_KEY oder GEMINI_API_KEY")
 
 // SuggestRequest is the input for habit suggestions.
 type SuggestRequest struct {
-	ExistingHabits []string
-	Routine        string // morning, evening, health, learning, productivity, ""
-	Goal           string // free-text goal
-	Count          int    // defaults to 6
+	ExistingHabits  []string
+	CompletionRates map[string]float64 // habit name → 0..1 completion rate (last 7 days)
+	Routine         string             // morning, evening, health, learning, productivity, ""
+	Goal            string
+	Count           int // defaults to 3
 }
 
 // Suggest streams habit suggestions from the auto-detected provider.
-// ctx can be cancelled to abort the inflight HTTP request immediately.
-// Each text chunk is passed to out as it arrives.
 func Suggest(ctx context.Context, req SuggestRequest, out func(chunk string)) (string, error) {
 	info, err := Detect()
 	if err != nil {
@@ -53,8 +95,7 @@ func SuggestBlocking(req SuggestRequest) (string, error) {
 	return Call(context.Background(), info, systemPromptSuggest, buildPrompt(req), nil)
 }
 
-// SuggestOllama streams suggestions from a local Ollama instance, bypassing
-// provider detection entirely. Used by the TUI (no API key required).
+// SuggestOllama streams suggestions from a local Ollama instance.
 func SuggestOllama(req SuggestRequest, out func(string)) (string, error) {
 	model := os.Getenv("OLLAMA_MODEL")
 	if model == "" {
@@ -77,6 +118,32 @@ func SuggestWithProvider(req SuggestRequest, p Provider, out func(string)) (stri
 		}
 	}
 	return Call(context.Background(), info, systemPromptSuggest, buildPrompt(req), out)
+}
+
+// Review streams an AI coaching briefing based on last week's data.
+func Review(ctx context.Context, data models.WeeklyReview, out func(string)) (string, error) {
+	info, err := Detect()
+	if err != nil {
+		return "", err
+	}
+	return Call(ctx, info, systemPromptReview, buildReviewPrompt(data), out)
+}
+
+// SuggestChains streams habit-chain suggestions based on existing habits.
+func SuggestChains(ctx context.Context, habits []string, out func(string)) (string, error) {
+	info, err := Detect()
+	if err != nil {
+		return "", err
+	}
+	if len(habits) < 2 {
+		return "", fmt.Errorf("mindestens 2 Habits für Ketten-Vorschläge nötig")
+	}
+	var b strings.Builder
+	b.WriteString("Meine Habits:\n")
+	for _, h := range habits {
+		b.WriteString("- " + h + "\n")
+	}
+	return Call(ctx, info, systemPromptChains, b.String(), out)
 }
 
 func detectForced(p Provider) (ProviderInfo, error) {
@@ -106,11 +173,16 @@ func buildPrompt(req SuggestRequest) string {
 	var b strings.Builder
 
 	if len(req.ExistingHabits) > 0 {
-		b.WriteString("Meine bestehenden Habits (keine Überschneidungen):\n")
+		b.WriteString("Meine bestehenden Habits:\n")
 		for _, h := range req.ExistingHabits {
-			b.WriteString("- " + h + "\n")
+			rate, hasRate := req.CompletionRates[h]
+			line := "- " + h
+			if hasRate {
+				line += fmt.Sprintf(" (%.0f%% letzte Woche)", rate*100)
+			}
+			b.WriteString(line + "\n")
 		}
-		b.WriteString("\n")
+		b.WriteString("Keine Überschneidungen mit diesen Habits.\n\n")
 	}
 
 	b.WriteString(fmt.Sprintf("Schlage mir genau %d Habits vor", req.Count))
@@ -134,5 +206,30 @@ func buildPrompt(req SuggestRequest) string {
 		b.WriteString(fmt.Sprintf("Mein Ziel: %s\n", req.Goal))
 	}
 
+	return b.String()
+}
+
+func buildReviewPrompt(data models.WeeklyReview) string {
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("Habits analysiert: %d\n", len(data.Habits)))
+	b.WriteString(fmt.Sprintf("Perfekte Tage diese Woche: %d/7\n\n", data.PerfectDays))
+
+	for _, h := range data.Habits {
+		name := h.Name
+		if h.Icon != "" {
+			name = h.Icon + " " + name
+		}
+		b.WriteString(fmt.Sprintf("### %s\n", name))
+		b.WriteString(fmt.Sprintf("- Letzte 7 Tage: %d/7 (%.0f%%)\n", h.DoneThisWeek, h.CompletionPct7*100))
+		b.WriteString(fmt.Sprintf("- Letzte 30 Tage: %d/30 (%.0f%%)\n", h.DoneLast30, h.CompletionPct30*100))
+		b.WriteString(fmt.Sprintf("- Aktueller Streak: %d Tage\n", h.CurrentStreak))
+		if len(h.RecentNotes) > 0 {
+			b.WriteString("- Notizen:\n")
+			for _, n := range h.RecentNotes {
+				b.WriteString(fmt.Sprintf("  [%s] %s\n", n.Date, n.Note))
+			}
+		}
+		b.WriteString("\n")
+	}
 	return b.String()
 }
