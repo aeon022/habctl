@@ -87,6 +87,8 @@ const (
 	viewGeminiCID
 	viewGeminiCS
 	viewOAuthWait
+	viewArchive   // archived habits list
+	viewGoalInput // goal → 3 decomposed habits
 )
 
 // ── messages ─────────────────────────────────────────────────────────────────
@@ -147,6 +149,13 @@ type chainsLoadedMsg []models.Chain
 type errMsg struct{ err error }
 type clearMsgMsg struct{}
 type statusMsg string
+type blinkMsg struct{}
+type notesLoadedMsg struct {
+	name  string
+	notes []models.NoteEntry
+}
+type archivedLoadedMsg []models.Habit
+type archiveReloadMsg struct{ status string }
 
 // ── model ────────────────────────────────────────────────────────────────────
 
@@ -206,9 +215,21 @@ type model struct {
 	editFreq    int
 	editSkip    int
 
-	// suggest mode: "habit" (default) or "chain"
+	// suggest mode: "habit" (default), "chain", or "decompose"
 	suggestMode       string
 	chainSuggestItems []chainSuggestItem
+
+	// UI state
+	compact bool // hide descriptions/notes in list view
+	blinkOn bool // streaming cursor blink state
+
+	// detail-view: loaded per-habit recent notes
+	recentNotes    []models.NoteEntry
+	recentNotesFor string
+
+	// archive view
+	archivedHabits []models.Habit
+	archiveCursor  int
 
 	cfg     config.Config
 	calData store.CalendarData
@@ -320,6 +341,31 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case blinkMsg:
+		m.blinkOn = !m.blinkOn
+		if (m.state == viewSuggest && !m.suggestDone) || (m.state == viewReview && !m.reviewDone) {
+			return m, startBlink()
+		}
+		return m, nil
+
+	case notesLoadedMsg:
+		m.recentNotes = msg.notes
+		m.recentNotesFor = msg.name
+		return m, nil
+
+	case archivedLoadedMsg:
+		m.archivedHabits = []models.Habit(msg)
+		return m, nil
+
+	case archiveReloadMsg:
+		m.message = msg.status
+		m.isErr = false
+		days := 30
+		if m.weekView {
+			days = 7
+		}
+		return m, tea.Batch(loadHabits(m.s, days), loadArchivedHabits(m.s), clearAfter())
+
 	case oauthSuccessMsg:
 		m.cfg.GoogleRefreshToken = msg.refreshToken
 		config.Save(m.cfg)
@@ -374,6 +420,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleGeminiCID(msg)
 		case viewGeminiCS:
 			return m.handleGeminiCS(msg)
+		case viewArchive:
+			return m.handleArchive(msg)
+		case viewGoalInput:
+			return m.handleGoalInput(msg)
 		case viewOAuthWait:
 			if msg.String() == "ctrl+c" {
 				return m, tea.Quit
@@ -386,7 +436,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.state == viewAddInput || m.state == viewAddDesc ||
 		m.state == viewKeyInput || m.state == viewEditHabit ||
 		m.state == viewGeminiCID || m.state == viewGeminiCS ||
-		m.state == viewGroupNew || m.state == viewNoteInput {
+		m.state == viewGroupNew || m.state == viewNoteInput ||
+		m.state == viewGoalInput {
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)
 		return m, cmd
@@ -417,6 +468,8 @@ func (m model) handleList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		h := m.habits[m.cursor]
 		name := h.Habit.Name
+		chainTo := h.ChainTo
+		chainToDone := isHabitDoneToday(m.habits, chainTo)
 		s := m.s
 		if h.CheckedToday {
 			return m, func() tea.Msg {
@@ -441,6 +494,9 @@ func (m model) handleList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if ms := streakMilestone(stats.Streak); ms != "" {
 				out += "  " + ms
 			}
+			if chainTo != "" && !chainToDone {
+				out += "  →  " + chainTo + "?"
+			}
 			return statusMsg(out)
 		}
 
@@ -449,6 +505,8 @@ func (m model) handleList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			break
 		}
 		m.state = viewHabitDetail
+		name := m.habits[m.cursor].Habit.Name
+		return m, loadRecentNotes(m.s, name)
 
 	case "w":
 		m.weekView = !m.weekView
@@ -457,6 +515,34 @@ func (m model) handleList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			days = 7
 		}
 		return m, loadHabits(m.s, days)
+
+	case "v":
+		m.compact = !m.compact
+
+	case "a":
+		if len(m.habits) == 0 {
+			break
+		}
+		name := m.habits[m.cursor].Habit.Name
+		s := m.s
+		return m, func() tea.Msg {
+			if err := s.ArchiveHabit(name); err != nil {
+				return errMsg{err}
+			}
+			return statusMsg("Archiviert: " + name)
+		}
+
+	case "A":
+		m.state = viewArchive
+		m.archiveCursor = 0
+		return m, loadArchivedHabits(m.s)
+
+	case "g":
+		m.state = viewGoalInput
+		m.input.Reset()
+		m.input.Placeholder = "z.B. mehr Energie morgens, besser schlafen…"
+		m.input.CharLimit = 120
+		m.input.Focus()
 
 	case "s":
 		if m.suggestCancel != nil {
@@ -511,7 +597,7 @@ func (m model) handleList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			case <-ctx.Done():
 			}
 		}()
-		return m, waitForChunk(m.suggestCh)
+		return m, tea.Batch(waitForChunk(m.suggestCh), startBlink())
 
 	case "r":
 		if m.reviewCancel != nil {
@@ -558,7 +644,7 @@ func (m model) handleList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			case <-ctx.Done():
 			}
 		}()
-		return m, waitForReviewChunk(m.reviewCh)
+		return m, tea.Batch(waitForReviewChunk(m.reviewCh), startBlink())
 
 	case "N":
 		if len(m.habits) == 0 {
@@ -931,6 +1017,8 @@ func (m model) handleHabitDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		h := m.habits[m.cursor]
 		name := h.Habit.Name
+		chainTo := h.ChainTo
+		chainToDone := isHabitDoneToday(m.habits, chainTo)
 		s := m.s
 		m.state = viewList
 		if h.CheckedToday {
@@ -955,6 +1043,9 @@ func (m model) handleHabitDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			if ms := streakMilestone(stats.Streak); ms != "" {
 				out += "  " + ms
+			}
+			if chainTo != "" && !chainToDone {
+				out += "  →  " + chainTo + "?"
 			}
 			return statusMsg(out)
 		}
@@ -1164,6 +1255,111 @@ func (m model) handleChainPick(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+func (m model) handleArchive(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+	case "esc", "q":
+		m.state = viewList
+	case "j", "down":
+		if m.archiveCursor < len(m.archivedHabits)-1 {
+			m.archiveCursor++
+		}
+	case "k", "up":
+		if m.archiveCursor > 0 {
+			m.archiveCursor--
+		}
+	case "r":
+		if len(m.archivedHabits) == 0 {
+			break
+		}
+		name := m.archivedHabits[m.archiveCursor].Name
+		s := m.s
+		return m, func() tea.Msg {
+			if err := s.UnarchiveHabit(name); err != nil {
+				return errMsg{err}
+			}
+			return archiveReloadMsg{"✓ " + name + " wiederhergestellt"}
+		}
+	case "d":
+		if len(m.archivedHabits) == 0 {
+			break
+		}
+		name := m.archivedHabits[m.archiveCursor].Name
+		s := m.s
+		return m, func() tea.Msg {
+			if err := s.DeleteHabit(name); err != nil {
+				return errMsg{err}
+			}
+			return archiveReloadMsg{"Gelöscht: " + name}
+		}
+	}
+	return m, nil
+}
+
+func (m model) handleGoalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+	case "esc":
+		m.state = viewList
+		return m, nil
+	case "enter":
+		goal := strings.TrimSpace(m.input.Value())
+		if goal == "" {
+			return m, nil
+		}
+		if m.suggestCancel != nil {
+			m.suggestCancel()
+		}
+		m.state = viewSuggest
+		m.suggestText = ""
+		m.suggestDone = false
+		m.suggestItems = nil
+		m.chainSuggestItems = nil
+		m.suggestCursor = 0
+		m.suggestGen++
+		m.suggestMode = "decompose"
+		existing := make([]string, 0, len(m.habits))
+		for _, h := range m.habits {
+			existing = append(existing, h.Habit.Name)
+		}
+		ch := make(chan suggestChunkResult, 64)
+		m.suggestCh = ch
+		gen := m.suggestGen
+		ctx, cancel := context.WithCancel(context.Background())
+		m.suggestCancel = cancel
+		goalCopy := goal
+		go func() {
+			defer cancel()
+			_, err := ai.DecomposeGoal(ctx, goalCopy, existing, func(chunk string) {
+				select {
+				case ch <- suggestChunkResult{text: chunk, gen: gen}:
+				case <-ctx.Done():
+				}
+			})
+			if err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				select {
+				case ch <- suggestChunkResult{err: err, gen: gen}:
+				case <-ctx.Done():
+				}
+				return
+			}
+			select {
+			case ch <- suggestChunkResult{done: true, gen: gen}:
+			case <-ctx.Done():
+			}
+		}()
+		return m, tea.Batch(waitForChunk(m.suggestCh), startBlink())
+	}
+	var cmd tea.Cmd
+	m.input, cmd = m.input.Update(msg)
+	return m, cmd
 }
 
 func (m model) handleHelp(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -1543,6 +1739,10 @@ func (m model) View() string {
 		return m.renderGeminiCS()
 	case viewOAuthWait:
 		return m.renderOAuthWait()
+	case viewArchive:
+		return m.renderArchive()
+	case viewGoalInput:
+		return m.renderGoalInput()
 	default:
 		return m.renderList()
 	}
@@ -1713,7 +1913,18 @@ func (m model) renderList() string {
 			}
 
 			selected := i == m.cursor
-			atRisk := h.Streak > 0 && !h.CheckedToday
+			var atRisk bool
+			if h.Habit.FreqTarget > 0 {
+				wd := int(time.Now().Weekday())
+				daysLeft := 1
+				if wd != 0 {
+					daysLeft = 8 - wd
+				}
+				needed := h.Habit.FreqTarget - h.WeeklyDone
+				atRisk = needed > 0 && daysLeft <= needed
+			} else {
+				atRisk = h.Streak > 0 && !h.CheckedToday
+			}
 
 			var cb string
 			var ns lipgloss.Style
@@ -1773,16 +1984,18 @@ func (m model) renderList() string {
 
 			b.WriteString(cb + nameCol + skCol + "\n")
 
-			const descMaxW = 58
-			const subIndent = "      " // 6 spaces — aligns under name (past checkbox)
-			if h.Habit.Description != "" {
-				b.WriteString(subIndent + styleMuted.Render(truncate(h.Habit.Description, descMaxW)) + "\n")
-			}
-			if h.TodayNote != "" {
-				b.WriteString(subIndent + styleMuted.Render("📝 "+truncate(h.TodayNote, descMaxW-3)) + "\n")
-			}
-			if h.ChainTo != "" {
-				b.WriteString(subIndent + styleMuted.Render("→ "+h.ChainTo) + "\n")
+			if !m.compact {
+				const descMaxW = 58
+				const subIndent = "      " // 6 spaces — aligns under name (past checkbox)
+				if h.Habit.Description != "" {
+					b.WriteString(subIndent + styleMuted.Render(truncate(h.Habit.Description, descMaxW)) + "\n")
+				}
+				if h.TodayNote != "" {
+					b.WriteString(subIndent + styleMuted.Render("📝 "+truncate(h.TodayNote, descMaxW-3)) + "\n")
+				}
+				if h.ChainTo != "" {
+					b.WriteString(subIndent + styleMuted.Render("→ "+h.ChainTo) + "\n")
+				}
 			}
 			b.WriteString("\n") // spacing between habits
 		}
@@ -1797,8 +2010,12 @@ func (m model) renderList() string {
 		b.WriteString(msgStyle.Render(m.message) + "\n\n")
 	}
 
+	compactHint := "v kompakt"
+	if m.compact {
+		compactHint = "v normal"
+	}
 	b.WriteString(styleMuted.Render(
-		"space ✓ · enter detail · N notiz · n neu · e edit · m gruppe · c ketten · s KI · r review · t stats · ? help · q quit"))
+		"space ✓ · enter detail · N notiz · n neu · e edit · a archiv · g ziel→habits · s KI · r review · c ketten · t stats · "+compactHint+" · ? help · q quit"))
 	return panelStyle.Render(b.String())
 }
 
@@ -2260,8 +2477,19 @@ func (m model) renderSuggest() string {
 		return panelStyle.Render(b.String())
 	}
 
-	// ── habit suggest mode ────────────────────────────────────────────────────
-	b.WriteString(styleLime.Bold(true).Render("Habit-Vorschläge") + "  " + providerLabel + "\n\n")
+	// ── habit / decompose suggest mode ───────────────────────────────────────
+	title := "Habit-Vorschläge"
+	loadingMsg := "Generiere Vorschläge…"
+	if m.suggestMode == "decompose" {
+		title = "Ziel-Habits"
+		loadingMsg = "Analysiere Ziel und erstelle Habits…"
+	}
+	b.WriteString(styleLime.Bold(true).Render(title) + "  " + providerLabel + "\n\n")
+
+	blinkCursor := "▌"
+	if m.blinkOn {
+		blinkCursor = " "
+	}
 
 	if len(m.suggestItems) > 0 {
 		checkOff := styleMuted.Render("[ ]")
@@ -2308,8 +2536,8 @@ func (m model) renderSuggest() string {
 		}
 		b.WriteString(styleMuted.Render("space ✓ · enter hinzufügen · a alle · j/k · esc zurück"))
 	} else if !m.suggestDone {
-		b.WriteString(styleMuted.Render("Generiere Vorschläge…") + "\n\n")
-		b.WriteString(styleLime.Render("▌"))
+		b.WriteString(styleMuted.Render(loadingMsg) + "\n\n")
+		b.WriteString(styleLime.Render(blinkCursor))
 	} else {
 		b.WriteString(styleWarn.Render("Format nicht erkannt.") + "\n")
 		b.WriteString(styleMuted.Render("s   nochmal versuchen") + "\n")
@@ -2505,22 +2733,25 @@ func (m model) renderHelp() string {
 	b.WriteString(row("j / ↓", "move down"))
 	b.WriteString(row("k / ↑", "move up"))
 	b.WriteString(section("Habits"))
-	b.WriteString(row("space", "check in today"))
-	b.WriteString(row("enter", "Habit öffnen (Detail, Beschreibung, History)"))
+	b.WriteString(row("space", "check in / undo check-in (toggle)"))
+	b.WriteString(row("enter", "Habit öffnen (Detail, Beschreibung, Notizen-History)"))
 	b.WriteString(row("N", "Notiz zu heutigem Check-in hinzufügen"))
 	b.WriteString(row("n", "neuen Habit anlegen (+ optionales Emoji)"))
-	b.WriteString(row("e", "Name + Icon bearbeiten"))
-	b.WriteString(row("E", "Beschreibung bearbeiten"))
-	b.WriteString(row("d", "Habit löschen"))
+	b.WriteString(row("e", "Habit bearbeiten (Name, Desc, Häufigkeit, Skip)"))
+	b.WriteString(row("a", "Habit archivieren (History bleibt)"))
+	b.WriteString(row("A", "Archiv öffnen (wiederherstellen / löschen)"))
+	b.WriteString(row("d", "Habit endgültig löschen"))
 	b.WriteString(section("Gruppen"))
 	b.WriteString(row("m", "Habit in Gruppe verschieben"))
 	b.WriteString(row("G", "Gruppen verwalten (add, delete)"))
-	b.WriteString(section("Views"))
+	b.WriteString(section("KI & Views"))
 	b.WriteString(row("s", "KI-Vorschläge (kontextbewusst)"))
-	b.WriteString(row("r", "KI-Wochenreview — Coaching-Briefing"))
+	b.WriteString(row("g", "Ziel → 3 verknüpfte Habits (Decompose)"))
+	b.WriteString(row("r", "KI-Wochenreview — Pattern-Coaching-Briefing"))
 	b.WriteString(row("t", "Statistiken — Heatmap & Completion"))
 	b.WriteString(row("c", "Habit-Ketten verwalten"))
 	b.WriteString(row("S", "Settings — Provider & API-Keys"))
+	b.WriteString(row("v", "kompakt/normal toggle (Beschreibungen ein/aus)"))
 	b.WriteString(row("w", "toggle 7d / 30d streak window"))
 	b.WriteString(section("Status"))
 	b.WriteString(row(styleOk.Render("✓  green"), "checked in today"))
@@ -2580,10 +2811,29 @@ func (m model) renderHabitDetail() string {
 	// ── today's note ──────────────────────────────────────────────────────────
 	if h.TodayNote != "" {
 		b.WriteString("\n")
-		b.WriteString(ind + styleMuted.Render("Notiz") + "\n")
+		b.WriteString(ind + styleMuted.Render("Notiz heute") + "\n")
 		for _, line := range strings.Split(wordWrap(h.TodayNote, maxW-len(ind)), "\n") {
 			if line != "" {
 				b.WriteString(ind + styleFg.Render(line) + "\n")
+			}
+		}
+	}
+
+	// ── recent notes history ──────────────────────────────────────────────────
+	if m.recentNotesFor == habit.Name && len(m.recentNotes) > 0 {
+		todayStr := time.Now().Format("2006-01-02")
+		var pastNotes []models.NoteEntry
+		for _, n := range m.recentNotes {
+			if n.Date != todayStr {
+				pastNotes = append(pastNotes, n)
+			}
+		}
+		if len(pastNotes) > 0 {
+			b.WriteString("\n")
+			b.WriteString(ind + styleMuted.Render("Frühere Notizen") + "\n")
+			for _, n := range pastNotes {
+				b.WriteString(ind + styleMuted.Render(n.Date+"  ") +
+					styleFg.Render(truncate(n.Note, maxW-len(ind)-13)) + "\n")
 			}
 		}
 	}
@@ -2662,6 +2912,10 @@ func (m model) renderReview() string {
 	}
 	b.WriteString(styleLime.Bold(true).Render("Wochenreview") + "  " + providerLabel + "\n\n")
 
+	blinkCursor := "▌"
+	if m.blinkOn {
+		blinkCursor = " "
+	}
 	if m.reviewText != "" {
 		for _, line := range strings.Split(m.reviewText, "\n") {
 			if strings.HasPrefix(line, "## ") {
@@ -2671,11 +2925,11 @@ func (m model) renderReview() string {
 			}
 		}
 		if !m.reviewDone {
-			b.WriteString(styleLime.Render("▌"))
+			b.WriteString(styleLime.Render(blinkCursor))
 		}
 	} else if !m.reviewDone {
 		b.WriteString(styleMuted.Render("Analysiere letzte Woche…") + "\n\n")
-		b.WriteString(styleLime.Render("▌"))
+		b.WriteString(styleLime.Render(blinkCursor))
 	}
 
 	b.WriteString("\n\n" + styleMuted.Render("esc zurück · r nochmal"))
@@ -2689,6 +2943,59 @@ func (m model) renderNoteInput() string {
 	b.WriteString(styleLime.Bold(true).Render("Notiz") + styleMuted.Render(" für "+m.noteForHabit) + "\n\n")
 	b.WriteString("  " + m.input.View() + "\n\n")
 	b.WriteString(styleMuted.Render("enter speichern · esc abbrechen"))
+	return panelStyle.Render(b.String())
+}
+
+// ── renderArchive ─────────────────────────────────────────────────────────────
+
+func (m model) renderArchive() string {
+	var b strings.Builder
+	b.WriteString(styleLime.Bold(true).Render("Archiv") + "\n")
+	b.WriteString(styleMuted.Render("Archivierte Habits — History bleibt erhalten.") + "\n\n")
+
+	if len(m.archivedHabits) == 0 {
+		b.WriteString(styleMuted.Render("Kein Archiv. a in der Liste archiviert Habits.") + "\n\n")
+	} else {
+		for i, h := range m.archivedHabits {
+			cursor := "  "
+			ns := styleMuted
+			if i == m.archiveCursor {
+				cursor = styleLime.Render("▶ ")
+				ns = styleFg
+			}
+			name := h.Name
+			if h.Icon != "" {
+				name = h.Icon + " " + name
+			}
+			b.WriteString(cursor + ns.Render(name) + "\n")
+			if h.Description != "" {
+				b.WriteString("      " + styleMuted.Render(truncate(h.Description, 52)) + "\n")
+			}
+		}
+		b.WriteString("\n")
+	}
+
+	if m.message != "" {
+		msgStyle := styleOk
+		if m.isErr {
+			msgStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
+		}
+		b.WriteString(msgStyle.Render(m.message) + "\n\n")
+	}
+
+	b.WriteString(styleMuted.Render("r wiederherstellen · d endgültig löschen · j/k navigieren · esc zurück"))
+	return panelStyle.Render(b.String())
+}
+
+// ── renderGoalInput ───────────────────────────────────────────────────────────
+
+func (m model) renderGoalInput() string {
+	var b strings.Builder
+	b.WriteString(styleLime.Bold(true).Render("Ziel → 3 verknüpfte Habits") + "\n\n")
+	b.WriteString(styleMuted.Render("Die KI schlägt 3 Habits vor die sich gegenseitig stärken.") + "\n")
+	b.WriteString(styleMuted.Render("Beispiele: mehr Energie morgens · besser schlafen · produktiver") + "\n\n")
+	b.WriteString(m.input.View() + "\n\n")
+	b.WriteString(styleMuted.Render("enter senden · esc zurück"))
 	return panelStyle.Render(b.String())
 }
 
@@ -2781,6 +3088,41 @@ func loadChains(s *store.Store) tea.Cmd {
 		}
 		return chainsLoadedMsg(cs)
 	}
+}
+
+func loadRecentNotes(s *store.Store, name string) tea.Cmd {
+	return func() tea.Msg {
+		notes, _ := s.GetRecentNotes(name, 5)
+		return notesLoadedMsg{name: name, notes: notes}
+	}
+}
+
+func loadArchivedHabits(s *store.Store) tea.Cmd {
+	return func() tea.Msg {
+		habits, err := s.ListArchivedHabits()
+		if err != nil {
+			return errMsg{err}
+		}
+		return archivedLoadedMsg(habits)
+	}
+}
+
+func startBlink() tea.Cmd {
+	return tea.Tick(500*time.Millisecond, func(_ time.Time) tea.Msg {
+		return blinkMsg{}
+	})
+}
+
+func isHabitDoneToday(habits []models.HabitStats, name string) bool {
+	if name == "" {
+		return false
+	}
+	for _, h := range habits {
+		if h.Habit.Name == name {
+			return h.CheckedToday
+		}
+	}
+	return false
 }
 
 func waitForReviewChunk(ch <-chan reviewChunkResult) tea.Cmd {

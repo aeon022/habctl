@@ -46,6 +46,21 @@ Ein kurzer, prägnanter Habit-Coaching-Tipp (1-2 Sätze).
 
 Keine Einleitung, keine Schlussworte außer dem Briefing selbst. Kein Markdown-Fettdruck in den Abschnittsnamen selbst.`
 
+const systemPromptDecompose = `Du bist ein Habit-Coach. Antworte auf Deutsch.
+
+Der Nutzer nennt ein Ziel. Schlage genau 3 miteinander verknüpfte Gewohnheiten vor, die sich gegenseitig stärken.
+
+Ausgabeformat — kein Text davor/danach:
+
+###
+Name: [Emoji] [Habit-Name]
+Zeit: [X Min/Tag]
+Nutzen: [wie dieser Habit das Ziel konkret unterstützt]
+Tipp: [wie er die anderen beiden Habits verstärkt oder von ihnen profitiert]
+###
+
+Regeln: Genau 3 Habits · gegenseitig verstärkend (zeitlich/thematisch) · Emoji direkt vor Name · 3–15 Min/Tag · keine Duplikate bestehender Habits`
+
 const systemPromptChains = `Du bist ein Habit-Coach. Antworte auf Deutsch.
 
 Analysiere die gegebenen Habits und schlage sinnvolle Habit-Ketten vor.
@@ -127,6 +142,24 @@ func Review(ctx context.Context, data models.WeeklyReview, out func(string)) (st
 		return "", err
 	}
 	return Call(ctx, info, systemPromptReview, buildReviewPrompt(data), out)
+}
+
+// DecomposeGoal takes a user goal and suggests 3 interconnected supporting habits.
+func DecomposeGoal(ctx context.Context, goal string, existing []string, out func(string)) (string, error) {
+	info, err := Detect()
+	if err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	if len(existing) > 0 {
+		b.WriteString("Meine bestehenden Habits (keine Duplikate):\n")
+		for _, h := range existing {
+			b.WriteString("- " + h + "\n")
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString("Mein Ziel: " + goal + "\n")
+	return Call(ctx, info, systemPromptDecompose, b.String(), out)
 }
 
 // SuggestChains streams habit-chain suggestions based on existing habits.
@@ -212,7 +245,14 @@ func buildPrompt(req SuggestRequest) string {
 func buildReviewPrompt(data models.WeeklyReview) string {
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("Habits analysiert: %d\n", len(data.Habits)))
-	b.WriteString(fmt.Sprintf("Perfekte Tage diese Woche: %d/7\n\n", data.PerfectDays))
+	b.WriteString(fmt.Sprintf("Perfekte Tage diese Woche: %d/7\n", data.PerfectDays))
+	if data.WeakestDay != "" {
+		b.WriteString(fmt.Sprintf("Schwächster Wochentag (30 Tage): %s\n", data.WeakestDay))
+	}
+	if data.StrongestDay != "" {
+		b.WriteString(fmt.Sprintf("Stärkster Wochentag (30 Tage): %s\n", data.StrongestDay))
+	}
+	b.WriteString("\n")
 
 	for _, h := range data.Habits {
 		name := h.Name

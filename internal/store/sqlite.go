@@ -109,6 +109,7 @@ func (s *Store) runMigrations() error {
 		)`},
 		{6, `ALTER TABLE habits ADD COLUMN freq_target  INTEGER NOT NULL DEFAULT 0`},
 		{7, `ALTER TABLE habits ADD COLUMN skip_allowed INTEGER NOT NULL DEFAULT 0`},
+		{8, `ALTER TABLE habits ADD COLUMN archived     INTEGER NOT NULL DEFAULT 0`},
 	}
 	for _, m := range migrations {
 		var n int
@@ -153,6 +154,51 @@ func (s *Store) DeleteHabit(name string) error {
 	return nil
 }
 
+// ArchiveHabit soft-deletes a habit (keeps history, hides from active list).
+func (s *Store) ArchiveHabit(name string) error {
+	res, err := s.db.Exec(`UPDATE habits SET archived = 1 WHERE name = ? AND archived = 0`, name)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("habit %q not found or already archived", name)
+	}
+	return nil
+}
+
+// UnarchiveHabit restores an archived habit to the active list.
+func (s *Store) UnarchiveHabit(name string) error {
+	_, err := s.db.Exec(`UPDATE habits SET archived = 0 WHERE name = ?`, name)
+	return err
+}
+
+// ListArchivedHabits returns all archived habits, newest first.
+func (s *Store) ListArchivedHabits() ([]models.Habit, error) {
+	rows, err := s.db.Query(`
+		SELECT id, name, description, icon, COALESCE(group_id,0),
+		       freq_target, skip_allowed, created_at
+		FROM habits WHERE archived = 1 ORDER BY created_at DESC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var habits []models.Habit
+	for rows.Next() {
+		var h models.Habit
+		var ts string
+		if err := rows.Scan(&h.ID, &h.Name, &h.Description, &h.Icon,
+			&h.GroupID, &h.FreqTarget, &h.SkipAllowed, &ts); err != nil {
+			return nil, err
+		}
+		h.Archived = true
+		h.CreatedAt, _ = time.Parse(tsLayout, ts)
+		habits = append(habits, h)
+	}
+	return habits, rows.Err()
+}
+
 // UpdateHabit updates the name, icon, and description of a habit.
 func (s *Store) UpdateHabit(oldName, newName, icon, description string) error {
 	_, err := s.db.Exec(
@@ -172,13 +218,14 @@ func (s *Store) SetHabitGroup(habitName string, groupID int64) error {
 	return err
 }
 
-// ListHabits returns all habits ordered by group sort_order then creation time.
+// ListHabits returns all active (non-archived) habits ordered by group sort_order then creation time.
 func (s *Store) ListHabits() ([]models.Habit, error) {
 	rows, err := s.db.Query(`
 		SELECT h.id, h.name, h.description, h.icon,
 		       COALESCE(h.group_id, 0), h.freq_target, h.skip_allowed, h.created_at
 		FROM habits h
 		LEFT JOIN groups g ON h.group_id = g.id
+		WHERE h.archived = 0
 		ORDER BY COALESCE(g.sort_order, 999999), h.created_at ASC
 	`)
 	if err != nil {
@@ -664,7 +711,67 @@ func (s *Store) GetWeeklyReview() (models.WeeklyReview, error) {
 			RecentNotes:     notes,
 		})
 	}
-	return models.WeeklyReview{Habits: habitData, PerfectDays: perfectDays}, nil
+	// ── weekday completion stats (last 30 days) ───────────────────────────────
+	weakestDay, strongestDay := "", ""
+	if len(habits) > 0 {
+		since30 := today.AddDate(0, 0, -29).Format(dateLayout)
+		var dowDone [7]int
+		drows, derr := s.db.Query(`
+			SELECT strftime('%w', ci.date), COUNT(DISTINCT ci.habit_id)
+			FROM checkins ci
+			JOIN habits h ON h.id = ci.habit_id
+			WHERE ci.date >= ? AND h.archived = 0
+			GROUP BY strftime('%w', ci.date)
+		`, since30)
+		if derr == nil {
+			defer drows.Close()
+			for drows.Next() {
+				var dow string
+				var cnt int
+				if drows.Scan(&dow, &cnt) == nil && len(dow) > 0 {
+					d := int(dow[0] - '0')
+					if d >= 0 && d < 7 {
+						dowDone[d] += cnt
+					}
+				}
+			}
+		}
+		var dowTotal [7]int
+		for i := 0; i < 30; i++ {
+			wd := int(today.AddDate(0, 0, -i).Weekday())
+			dowTotal[wd] += len(habits)
+		}
+		weekdayDE := [7]string{"Sonntag", "Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag"}
+		weakestPct, strongestPct := 2.0, -1.0
+		weakestIdx, strongestIdx := -1, -1
+		for i := 0; i < 7; i++ {
+			if dowTotal[i] == 0 {
+				continue
+			}
+			pct := float64(dowDone[i]) / float64(dowTotal[i])
+			if pct < weakestPct {
+				weakestPct = pct
+				weakestIdx = i
+			}
+			if pct > strongestPct {
+				strongestPct = pct
+				strongestIdx = i
+			}
+		}
+		if weakestIdx >= 0 {
+			weakestDay = fmt.Sprintf("%s (%.0f%%)", weekdayDE[weakestIdx], weakestPct*100)
+		}
+		if strongestIdx >= 0 && strongestIdx != weakestIdx {
+			strongestDay = fmt.Sprintf("%s (%.0f%%)", weekdayDE[strongestIdx], strongestPct*100)
+		}
+	}
+
+	return models.WeeklyReview{
+		Habits:       habitData,
+		PerfectDays:  perfectDays,
+		WeakestDay:   weakestDay,
+		StrongestDay: strongestDay,
+	}, nil
 }
 
 // ── util ─────────────────────────────────────────────────────────────────────

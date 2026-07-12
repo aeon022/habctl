@@ -20,6 +20,7 @@ type Habit struct {
 	GroupID     int64
 	FreqTarget  int // 0 = daily, N = N times per week
 	SkipAllowed int // consecutive missed days before streak breaks (0 = none)
+	Archived    bool
 	CreatedAt   time.Time
 }
 
@@ -76,6 +77,8 @@ type HabitWeekData struct {
 
 // WeeklyReview aggregates per-habit data for the AI coaching briefing.
 type WeeklyReview struct {
-	Habits      []HabitWeekData
-	PerfectDays int // days this week where every habit was checked in
+	Habits       []HabitWeekData
+	PerfectDays  int    // days this week where every habit was checked in
+	WeakestDay   string // e.g. "Mittwoch (23%)" — lowest completion weekday (30d)
+	StrongestDay string // e.g. "Montag (87%)" — highest completion weekday (30d)
 }
