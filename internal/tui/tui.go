@@ -170,6 +170,7 @@ type model struct {
 	message  string
 	isErr    bool
 	weekView bool
+	height   int
 
 	suggestText   string
 	suggestDone   bool
@@ -261,6 +262,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
+		m.height = msg.Height
 		return m, nil
 
 	case habitsLoadedMsg:
@@ -1748,16 +1750,37 @@ func (m model) View() string {
 	}
 }
 
+// ── layout helpers ────────────────────────────────────────────────────────────
+
+// panel wraps content in the shared panel style with a width that fills the terminal.
+func (m model) panel(s string) string {
+	w := m.width - 2
+	if w < 62 {
+		w = 62
+	}
+	return panelStyle.Width(w).Render(s)
+}
+
+// innerWidth returns the usable text width inside the panel.
+// panelStyle: border 1+1 + padding 2+2 = 6 chars overhead; -2 for panel margin.
+func (m model) innerWidth() int {
+	w := m.width - 8
+	if w < 54 {
+		w = 54
+	}
+	if w > 128 {
+		w = 128
+	}
+	return w
+}
+
 // ── renderList ────────────────────────────────────────────────────────────────
 
 func (m model) renderList() string {
 	var b strings.Builder
 	today := truncateDay(time.Now())
 
-	innerW := m.width - 6 // border(1+1) + padding(2+2)
-	if innerW < 55 {
-		innerW = 68
-	}
+	innerW := m.innerWidth()
 
 	// ── header ────────────────────────────────────────────────────────────────
 
@@ -2010,13 +2033,8 @@ func (m model) renderList() string {
 		b.WriteString(msgStyle.Render(m.message) + "\n\n")
 	}
 
-	compactHint := "v kompakt"
-	if m.compact {
-		compactHint = "v normal"
-	}
-	b.WriteString(styleMuted.Render(
-		"space ✓ · enter detail · N notiz · n neu · e edit · a archiv · g ziel→habits · s KI · r review · c ketten · t stats · "+compactHint+" · ? help · q quit"))
-	return panelStyle.Render(b.String())
+	b.WriteString(styleMuted.Render("space ✓/✗ · ↵ öffnen · n neu · e edit · s KI · r review · ? hilfe · q"))
+	return m.panel(b.String())
 }
 
 func motivationalMsg(checkIns int) string {
@@ -2050,7 +2068,7 @@ func (m model) renderAddInput() string {
 	b.WriteString(styleMuted.Render("Tipp: emoji als Prefix — 🏃 Laufen, ☕ Kaffee, 📚 Lesen") + "\n\n")
 	b.WriteString(m.input.View() + "\n\n")
 	b.WriteString(styleMuted.Render("enter weiter · esc abbrechen"))
-	return panelStyle.Render(b.String())
+	return m.panel(b.String())
 }
 
 // ── renderAddDesc ─────────────────────────────────────────────────────────────
@@ -2065,7 +2083,7 @@ func (m model) renderAddDesc() string {
 	b.WriteString(styleMuted.Render("Kurze Notiz? (enter zum Überspringen)") + "\n\n")
 	b.WriteString(m.input.View() + "\n\n")
 	b.WriteString(styleMuted.Render("enter speichern · esc überspringen"))
-	return panelStyle.Render(b.String())
+	return m.panel(b.String())
 }
 
 // ── renderEditHabit ───────────────────────────────────────────────────────────
@@ -2148,7 +2166,7 @@ func (m model) renderEditHabit() string {
 	b.WriteString("\n")
 
 	b.WriteString("\n" + styleMuted.Render("enter speichern · tab nächstes Feld · +/- bei Zahlen · esc abbrechen"))
-	return panelStyle.Render(b.String())
+	return m.panel(b.String())
 }
 
 // ── renderGroupMgr ────────────────────────────────────────────────────────────
@@ -2185,7 +2203,7 @@ func (m model) renderGroupMgr() string {
 	}
 
 	b.WriteString(styleMuted.Render("a neu · d löschen · j/k navigieren · esc zurück"))
-	return panelStyle.Render(b.String())
+	return m.panel(b.String())
 }
 
 // ── renderGroupNew ────────────────────────────────────────────────────────────
@@ -2196,7 +2214,7 @@ func (m model) renderGroupNew() string {
 	b.WriteString(styleMuted.Render("Tipp: mit Emoji starten — 🌅 Morgen, 💻 Arbeit, 🌙 Abend") + "\n\n")
 	b.WriteString(m.input.View() + "\n\n")
 	b.WriteString(styleMuted.Render("enter erstellen · esc abbrechen"))
-	return panelStyle.Render(b.String())
+	return m.panel(b.String())
 }
 
 // ── renderGroupPick ───────────────────────────────────────────────────────────
@@ -2230,7 +2248,7 @@ func (m model) renderGroupPick() string {
 	}
 
 	b.WriteString("\n" + styleMuted.Render("enter wählen · j/k navigieren · esc abbrechen"))
-	return panelStyle.Render(b.String())
+	return m.panel(b.String())
 }
 
 // ── renderStats ───────────────────────────────────────────────────────────────
@@ -2246,7 +2264,7 @@ func (m model) renderStats() string {
 	if total == 0 {
 		b.WriteString(styleMuted.Render("Erst Habits anlegen (n), dann kommen hier Daten.") + "\n")
 		b.WriteString("\n" + styleMuted.Render("esc zurück"))
-		return panelStyle.Render(b.String())
+		return m.panel(b.String())
 	}
 
 	today := truncateDay(time.Now())
@@ -2408,7 +2426,7 @@ func (m model) renderStats() string {
 	}
 
 	b.WriteString("\n" + styleMuted.Render("esc zurück"))
-	return panelStyle.Render(b.String())
+	return m.panel(b.String())
 }
 
 // ── renderSuggest ─────────────────────────────────────────────────────────────
@@ -2474,7 +2492,7 @@ func (m model) renderSuggest() string {
 			b.WriteString(styleWarn.Render("Keine Vorschläge. Mindestens 2 Habits brauche ich.") + "\n")
 			b.WriteString(styleMuted.Render("esc zurück"))
 		}
-		return panelStyle.Render(b.String())
+		return m.panel(b.String())
 	}
 
 	// ── habit / decompose suggest mode ───────────────────────────────────────
@@ -2545,7 +2563,7 @@ func (m model) renderSuggest() string {
 		b.WriteString(styleMuted.Render("esc zurück"))
 	}
 
-	return panelStyle.Render(b.String())
+	return m.panel(b.String())
 }
 
 // ── renderSettings ────────────────────────────────────────────────────────────
@@ -2624,7 +2642,7 @@ func (m model) renderSettings() string {
 		b.WriteString(cursor + label + "  " + badge + "\n")
 	}
 	b.WriteString("\n" + styleMuted.Render("enter konfigurieren · j/k navigieren · esc zurück"))
-	return panelStyle.Render(b.String())
+	return m.panel(b.String())
 }
 
 // ── renderKeyInput ────────────────────────────────────────────────────────────
@@ -2645,7 +2663,7 @@ func (m model) renderKeyInput() string {
 	b.WriteString(styleMuted.Render("API-Key (Cmd+V):") + "\n")
 	b.WriteString("  " + m.input.View() + "\n\n")
 	b.WriteString(styleMuted.Render("enter speichern · o Browser öffnen · esc zurück"))
-	return panelStyle.Render(b.String())
+	return m.panel(b.String())
 }
 
 // ── renderGeminiMenu / CID / CS / OAuthWait ───────────────────────────────────
@@ -2671,7 +2689,7 @@ func (m model) renderGeminiMenu() string {
 		b.WriteString(styleOk.Render("● bereits eingeloggt (OAuth)") + "\n\n")
 	}
 	b.WriteString(styleMuted.Render("enter auswählen · j/k navigieren · esc zurück"))
-	return panelStyle.Render(b.String())
+	return m.panel(b.String())
 }
 
 func (m model) renderGeminiCID() string {
@@ -2683,7 +2701,7 @@ func (m model) renderGeminiCID() string {
 	b.WriteString(styleMuted.Render("Client ID:") + "\n")
 	b.WriteString("  " + m.input.View() + "\n\n")
 	b.WriteString(styleMuted.Render("enter weiter · o Browser öffnen · esc zurück"))
-	return panelStyle.Render(b.String())
+	return m.panel(b.String())
 }
 
 func (m model) renderGeminiCS() string {
@@ -2693,7 +2711,7 @@ func (m model) renderGeminiCS() string {
 	b.WriteString(styleMuted.Render("Client Secret:") + "\n")
 	b.WriteString("  " + m.input.View() + "\n\n")
 	b.WriteString(styleMuted.Render("enter Browser-Login starten · esc zurück"))
-	return panelStyle.Render(b.String())
+	return m.panel(b.String())
 }
 
 func (m model) renderOAuthWait() string {
@@ -2706,7 +2724,7 @@ func (m model) renderOAuthWait() string {
 			"3. Seite zeigt \"Login erfolgreich\" → fertig\n\n"+
 			"Timeout: 5 Minuten") + "\n")
 	b.WriteString("\n" + styleLime.Render("⠿ ") + styleMuted.Render("warte…"))
-	return panelStyle.Render(b.String())
+	return m.panel(b.String())
 }
 
 // ── renderAdd / renderHelp ────────────────────────────────────────────────────
@@ -2761,14 +2779,14 @@ func (m model) renderHelp() string {
 	b.WriteString(row("?", "toggle this help screen"))
 	b.WriteString(row("q / ctrl+c", "quit"))
 	b.WriteString("\n  " + styleMuted.Render("esc / ?   close help"))
-	return panelStyle.Render(b.String())
+	return m.panel(b.String())
 }
 
 // ── renderHabitDetail ─────────────────────────────────────────────────────────
 
 func (m model) renderHabitDetail() string {
 	if len(m.habits) == 0 {
-		return panelStyle.Render(styleMuted.Render("Kein Habit ausgewählt."))
+		return m.panel(styleMuted.Render("Kein Habit ausgewählt."))
 	}
 	h := m.habits[m.cursor]
 	habit := h.Habit
@@ -2897,7 +2915,7 @@ func (m model) renderHabitDetail() string {
 	} else {
 		b.WriteString(styleMuted.Render("space check in · e bearbeiten · esc zurück"))
 	}
-	return panelStyle.Render(b.String())
+	return m.panel(b.String())
 }
 
 // ── renderReview ──────────────────────────────────────────────────────────────
@@ -2933,7 +2951,7 @@ func (m model) renderReview() string {
 	}
 
 	b.WriteString("\n\n" + styleMuted.Render("esc zurück · r nochmal"))
-	return panelStyle.Render(b.String())
+	return m.panel(b.String())
 }
 
 // ── renderNoteInput ───────────────────────────────────────────────────────────
@@ -2943,7 +2961,7 @@ func (m model) renderNoteInput() string {
 	b.WriteString(styleLime.Bold(true).Render("Notiz") + styleMuted.Render(" für "+m.noteForHabit) + "\n\n")
 	b.WriteString("  " + m.input.View() + "\n\n")
 	b.WriteString(styleMuted.Render("enter speichern · esc abbrechen"))
-	return panelStyle.Render(b.String())
+	return m.panel(b.String())
 }
 
 // ── renderArchive ─────────────────────────────────────────────────────────────
@@ -2984,7 +3002,7 @@ func (m model) renderArchive() string {
 	}
 
 	b.WriteString(styleMuted.Render("r wiederherstellen · d endgültig löschen · j/k navigieren · esc zurück"))
-	return panelStyle.Render(b.String())
+	return m.panel(b.String())
 }
 
 // ── renderGoalInput ───────────────────────────────────────────────────────────
@@ -2996,7 +3014,7 @@ func (m model) renderGoalInput() string {
 	b.WriteString(styleMuted.Render("Beispiele: mehr Energie morgens · besser schlafen · produktiver") + "\n\n")
 	b.WriteString(m.input.View() + "\n\n")
 	b.WriteString(styleMuted.Render("enter senden · esc zurück"))
-	return panelStyle.Render(b.String())
+	return m.panel(b.String())
 }
 
 // ── renderChainMgr ────────────────────────────────────────────────────────────
@@ -3021,7 +3039,7 @@ func (m model) renderChainMgr() string {
 	}
 
 	b.WriteString("\n" + styleMuted.Render("a anlegen · d löschen · s KI-Vorschläge · esc zurück"))
-	return panelStyle.Render(b.String())
+	return m.panel(b.String())
 }
 
 // ── renderChainPick ───────────────────────────────────────────────────────────
@@ -3055,7 +3073,7 @@ func (m model) renderChainPick() string {
 	}
 
 	b.WriteString("\n" + styleMuted.Render("enter auswählen · esc zurück"))
-	return panelStyle.Render(b.String())
+	return m.panel(b.String())
 }
 
 // ── commands ──────────────────────────────────────────────────────────────────
