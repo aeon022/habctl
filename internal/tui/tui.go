@@ -1635,16 +1635,18 @@ func (m model) renderList() string {
 
 			b.WriteString(cb + nameCol + skCol + "\n")
 
-			maxSubW := innerW - 4 - 3
+			const descMaxW = 58
+			const subIndent = "      " // 6 spaces — aligns under name (past checkbox)
 			if h.Habit.Description != "" {
-				b.WriteString("    " + styleMuted.Render("// "+truncate(h.Habit.Description, maxSubW)) + "\n")
+				b.WriteString(subIndent + styleMuted.Render(truncate(h.Habit.Description, descMaxW)) + "\n")
 			}
 			if h.TodayNote != "" {
-				b.WriteString("    " + styleMuted.Render("📝 "+truncate(h.TodayNote, maxSubW)) + "\n")
+				b.WriteString(subIndent + styleMuted.Render("📝 "+truncate(h.TodayNote, descMaxW-3)) + "\n")
 			}
 			if h.ChainTo != "" {
-				b.WriteString("    " + styleMuted.Render("→ "+h.ChainTo) + "\n")
+				b.WriteString(subIndent + styleMuted.Render("→ "+h.ChainTo) + "\n")
 			}
+			b.WriteString("\n") // spacing between habits
 		}
 	}
 
@@ -2292,98 +2294,96 @@ func (m model) renderHabitDetail() string {
 	h := m.habits[m.cursor]
 	habit := h.Habit
 
+	const maxW = 62 // max content width — keeps text readable, not edge-to-edge
+	ind := "  "     // section indent
+
 	var b strings.Builder
 
-	// ── title ──────────────────────────────────────────────────────────────────
+	// ── title + status ────────────────────────────────────────────────────────
 	title := habit.Name
 	if habit.Icon != "" {
 		title = habit.Icon + "  " + habit.Name
 	}
 	b.WriteString(styleLime.Bold(true).Render(title) + "\n")
 
-	// status badge
 	switch {
 	case h.CheckedToday && h.Streak > 0:
-		b.WriteString(styleOkBold.Render(fmt.Sprintf("✓ heute erledigt · 🔥 %d Tage Streak", h.Streak)) + "\n")
+		b.WriteString(styleOk.Render(fmt.Sprintf("✓ heute  ·  🔥 %d Tage", h.Streak)) + "\n")
 	case h.CheckedToday:
 		b.WriteString(styleOk.Render("✓ heute erledigt") + "\n")
 	case h.Streak > 0:
-		b.WriteString(styleWarnBd.Render(fmt.Sprintf("! noch nicht · 🔥 %d Tage Streak in Gefahr", h.Streak)) + "\n")
+		b.WriteString(styleWarn.Render(fmt.Sprintf("noch offen  ·  🔥 %d Tage in Gefahr", h.Streak)) + "\n")
 	default:
-		b.WriteString(styleMuted.Render("○ noch nicht erledigt heute") + "\n")
+		b.WriteString(styleMuted.Render("noch nicht erledigt heute") + "\n")
 	}
 
-	// ── description ────────────────────────────────────────────────────────────
+	// ── description ───────────────────────────────────────────────────────────
 	if habit.Description != "" {
 		b.WriteString("\n")
-		innerW := m.width - 12
-		if innerW < 40 {
-			innerW = 60
-		}
-		for _, line := range strings.Split(wordWrap(habit.Description, innerW), "\n") {
-			b.WriteString(styleFg.Render(line) + "\n")
+		for _, line := range strings.Split(wordWrap(habit.Description, maxW-len(ind)), "\n") {
+			if line == "" {
+				b.WriteString("\n")
+			} else {
+				b.WriteString(ind + styleFg.Render(line) + "\n")
+			}
 		}
 	}
 
 	// ── today's note ──────────────────────────────────────────────────────────
 	if h.TodayNote != "" {
-		b.WriteString("\n" + styleMuted.Render("📝 Notiz heute") + "\n")
-		b.WriteString(styleFg.Render(h.TodayNote) + "\n")
+		b.WriteString("\n")
+		b.WriteString(ind + styleMuted.Render("Notiz") + "\n")
+		for _, line := range strings.Split(wordWrap(h.TodayNote, maxW-len(ind)), "\n") {
+			if line != "" {
+				b.WriteString(ind + styleFg.Render(line) + "\n")
+			}
+		}
 	}
 
 	// ── 7-day history ─────────────────────────────────────────────────────────
-	b.WriteString("\n" + styleMuted.Render("// letzte 7 Tage") + "\n")
+	b.WriteString("\n")
+	b.WriteString(ind + styleMuted.Render("Letzte 7 Tage") + "\n")
 	today := truncateDay(time.Now())
 	dayAbbrDE := [7]string{"So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"}
-	b.WriteString("  ")
+	var dayRow, dotRow strings.Builder
 	for i := 0; i < 7; i++ {
 		d := today.AddDate(0, 0, i-6)
-		abbr := dayAbbrDE[int(d.Weekday())]
+		abbr := fmt.Sprintf("%-4s", dayAbbrDE[int(d.Weekday())])
 		if h.Last7Days[i] {
-			b.WriteString(styleOkBold.Render(abbr) + " ")
+			dayRow.WriteString(styleOk.Render(abbr))
+			dotRow.WriteString(styleOkBold.Render("✓   "))
 		} else if i == 6 {
-			b.WriteString(styleWarn.Render(abbr) + " ")
+			dayRow.WriteString(styleWarn.Render(abbr))
+			dotRow.WriteString(styleMuted.Render("·   "))
 		} else {
-			b.WriteString(styleMuted.Render(abbr) + " ")
+			dayRow.WriteString(styleMuted.Render(abbr))
+			dotRow.WriteString(styleMuted.Render("·   "))
 		}
 	}
-	b.WriteString("\n  ")
-	for i := 0; i < 7; i++ {
-		if h.Last7Days[i] {
-			b.WriteString(styleOkBold.Render(" ✓ ") + " ")
-		} else {
-			b.WriteString(styleMuted.Render(" · ") + " ")
-		}
-	}
-	b.WriteString("\n")
+	b.WriteString(ind + dayRow.String() + "\n")
+	b.WriteString(ind + dotRow.String() + "\n")
 
 	// ── stats ─────────────────────────────────────────────────────────────────
-	b.WriteString("\n" + styleMuted.Render("// stats") + "\n")
-	numV := styleLime.Bold(true)
-	b.WriteString(fmt.Sprintf("  %s %s   %s %s",
-		numV.Render(fmt.Sprintf("%d", h.Streak)), styleMuted.Render("streak"),
-		numV.Render(fmt.Sprintf("%d", h.LongestStreak)), styleMuted.Render("longest"),
-	))
-	if h.TotalDays > 0 {
-		b.WriteString(fmt.Sprintf("   %s %s",
-			numV.Render(fmt.Sprintf("%d", h.TotalDays)), styleMuted.Render("Tage/30"),
-		))
-	}
 	b.WriteString("\n")
+	num := styleLime.Bold(true)
+	lbl := styleMuted
+	b.WriteString(ind + num.Render(fmt.Sprintf("%d", h.Streak)) + " " + lbl.Render("Streak") +
+		"   " + num.Render(fmt.Sprintf("%d", h.LongestStreak)) + " " + lbl.Render("Längster") +
+		"   " + num.Render(fmt.Sprintf("%d", h.TotalDays)) + " " + lbl.Render("Tage/30") + "\n")
 
 	// ── chain ─────────────────────────────────────────────────────────────────
 	if h.ChainTo != "" {
-		b.WriteString("\n" + styleMuted.Render("// danach") + "\n")
-		b.WriteString("  " + styleMuted.Render("→ ") + styleFg.Render(h.ChainTo) + "\n")
+		b.WriteString("\n")
+		b.WriteString(ind + styleMuted.Render("Danach  →  ") + styleFg.Render(h.ChainTo) + "\n")
 	}
 
 	// ── footer ────────────────────────────────────────────────────────────────
 	b.WriteString("\n")
-	footer := "space ✓ · N notiz · e bearbeiten · esc zurück"
-	if !h.CheckedToday {
-		footer = "space ✓ erledigt · e bearbeiten · esc zurück"
+	if h.CheckedToday {
+		b.WriteString(styleMuted.Render("space ✓ · N notiz · e bearbeiten · esc zurück"))
+	} else {
+		b.WriteString(styleMuted.Render("space check in · e bearbeiten · esc zurück"))
 	}
-	b.WriteString(styleMuted.Render(footer))
 	return panelStyle.Render(b.String())
 }
 
