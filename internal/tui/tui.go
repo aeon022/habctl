@@ -115,6 +115,13 @@ type suggestItem struct {
 	selected bool
 }
 
+type chainSuggestItem struct {
+	from     string
+	to       string
+	reason   string
+	selected bool
+}
+
 type reviewChunkResult struct {
 	text string
 	done bool
@@ -193,6 +200,16 @@ type model struct {
 	// note flow: add note to today's check-in
 	noteForHabit string // habit name the note belongs to
 
+	// extended edit-habit fields (buffered across tab switches)
+	editNameBuf string
+	editDescBuf string
+	editFreq    int
+	editSkip    int
+
+	// suggest mode: "habit" (default) or "chain"
+	suggestMode       string
+	chainSuggestItems []chainSuggestItem
+
 	cfg     config.Config
 	calData store.CalendarData
 	width   int
@@ -268,7 +285,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case suggestDoneMsg:
 		if msg.gen == m.suggestGen {
 			m.suggestDone = true
-			m.suggestItems = parseSuggestions(m.suggestText)
+			if m.suggestMode == "chain" {
+				m.chainSuggestItems = parseChainSuggestions(m.suggestText)
+			} else {
+				m.suggestItems = parseSuggestions(m.suggestText)
+			}
 			m.suggestCursor = 0
 		}
 		return m, nil
@@ -397,6 +418,14 @@ func (m model) handleList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		h := m.habits[m.cursor]
 		name := h.Habit.Name
 		s := m.s
+		if h.CheckedToday {
+			return m, func() tea.Msg {
+				if err := s.DeleteCheckIn(name, time.Now()); err != nil {
+					return errMsg{err}
+				}
+				return statusMsg("✗ " + name + " abgehakt")
+			}
+		}
 		return m, func() tea.Msg {
 			if err := s.CheckIn(name, time.Now()); err != nil {
 				return errMsg{err}
@@ -437,8 +466,10 @@ func (m model) handleList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.suggestText = ""
 		m.suggestDone = false
 		m.suggestItems = nil
+		m.chainSuggestItems = nil
 		m.suggestCursor = 0
 		m.suggestGen++
+		m.suggestMode = "habit"
 		existing := make([]string, 0, len(m.habits))
 		rates := make(map[string]float64, len(m.habits))
 		for _, h := range m.habits {
@@ -573,12 +604,15 @@ func (m model) handleList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		h := m.habits[m.cursor].Habit
 		m.editOldName = h.Name
 		m.editCursor = 0
+		m.editDescBuf = h.Description
+		m.editFreq = h.FreqTarget
+		m.editSkip = h.SkipAllowed
 		m.state = viewEditHabit
-		// pre-fill with icon + name
 		combined := h.Name
 		if h.Icon != "" {
 			combined = h.Icon + " " + h.Name
 		}
+		m.editNameBuf = combined
 		m.input.Reset()
 		m.input.SetValue(combined)
 		m.input.CursorEnd()
@@ -592,6 +626,14 @@ func (m model) handleList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		h := m.habits[m.cursor].Habit
 		m.editOldName = h.Name
 		m.editCursor = 1
+		combined := h.Name
+		if h.Icon != "" {
+			combined = h.Icon + " " + h.Name
+		}
+		m.editNameBuf = combined
+		m.editDescBuf = h.Description
+		m.editFreq = h.FreqTarget
+		m.editSkip = h.SkipAllowed
 		m.state = viewEditHabit
 		m.input.Reset()
 		m.input.SetValue(h.Description)
@@ -694,70 +736,84 @@ func (m model) handleEditHabit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "esc":
 		m.state = viewList
 		return m, nil
+
 	case "tab":
-		// switch between name+icon and description field
-		val := m.input.Value()
-		if m.editCursor == 0 {
-			// Save the name/icon field temporarily and switch to description
-			h := m.habits[m.cursor].Habit
+		switch m.editCursor {
+		case 0:
+			m.editNameBuf = strings.TrimSpace(m.input.Value())
 			m.editCursor = 1
 			m.input.Reset()
-			m.input.SetValue(h.Description)
+			m.input.SetValue(m.editDescBuf)
 			m.input.CursorEnd()
-		} else {
+		case 1:
+			m.editDescBuf = strings.TrimSpace(m.input.Value())
+			m.editCursor = 2
+		case 2:
+			m.editCursor = 3
+		case 3:
 			m.editCursor = 0
-			h := m.habits[m.cursor].Habit
-			combined := h.Name
-			if h.Icon != "" {
-				combined = h.Icon + " " + h.Name
-			}
 			m.input.Reset()
-			m.input.SetValue(combined)
+			m.input.SetValue(m.editNameBuf)
 			m.input.CursorEnd()
 		}
-		_ = val
+		m.input.Focus()
 		return m, nil
+
+	case "+", "=":
+		if m.editCursor == 2 {
+			m.editFreq++
+		} else if m.editCursor == 3 {
+			m.editSkip++
+		}
+		return m, nil
+
+	case "-":
+		if m.editCursor == 2 && m.editFreq > 0 {
+			m.editFreq--
+		} else if m.editCursor == 3 && m.editSkip > 0 {
+			m.editSkip--
+		}
+		return m, nil
+
 	case "enter":
-		val := strings.TrimSpace(m.input.Value())
-		oldName := m.editOldName
-		// Fetch current habit data
-		var currentHabit models.Habit
-		for _, h := range m.habits {
-			if h.Habit.Name == oldName {
-				currentHabit = h.Habit
-				break
-			}
-		}
-		var newName, newIcon, newDesc string
 		if m.editCursor == 0 {
-			// editing name + icon
-			newIcon, newName = splitIcon(val)
-			if newName == "" {
-				newName = val
-				newIcon = ""
-			}
-			newDesc = currentHabit.Description
-		} else {
-			// editing description
-			newName = currentHabit.Name
-			newIcon = currentHabit.Icon
-			newDesc = val
+			m.editNameBuf = strings.TrimSpace(m.input.Value())
+		} else if m.editCursor == 1 {
+			m.editDescBuf = strings.TrimSpace(m.input.Value())
 		}
-		if newName == "" {
+		icon, name := splitIcon(m.editNameBuf)
+		if name == "" {
+			name = m.editNameBuf
+			icon = ""
+		}
+		if name == "" {
 			return m, nil
 		}
+		oldName := m.editOldName
+		desc := m.editDescBuf
+		freq := m.editFreq
+		skip := m.editSkip
 		s := m.s
 		m.state = viewList
 		return m, func() tea.Msg {
-			if err := s.UpdateHabit(oldName, newName, newIcon, newDesc); err != nil {
+			if err := s.UpdateHabit(oldName, name, icon, desc); err != nil {
 				return errMsg{err}
 			}
-			return statusMsg("✓ " + newName + " aktualisiert")
+			if err := s.SetHabitFreq(name, freq); err != nil {
+				return errMsg{err}
+			}
+			if err := s.SetHabitSkip(name, skip); err != nil {
+				return errMsg{err}
+			}
+			return statusMsg("✓ " + name + " aktualisiert")
 		}
 	}
-	var cmd tea.Cmd
-	m.input, cmd = m.input.Update(msg)
-	return m, cmd
+	if m.editCursor <= 1 {
+		var cmd tea.Cmd
+		m.input, cmd = m.input.Update(msg)
+		return m, cmd
+	}
+	return m, nil
 }
 
 func (m model) handleGroupMgr(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -877,6 +933,14 @@ func (m model) handleHabitDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		name := h.Habit.Name
 		s := m.s
 		m.state = viewList
+		if h.CheckedToday {
+			return m, func() tea.Msg {
+				if err := s.DeleteCheckIn(name, time.Now()); err != nil {
+					return errMsg{err}
+				}
+				return statusMsg("✗ " + name + " abgehakt")
+			}
+		}
 		return m, func() tea.Msg {
 			if err := s.CheckIn(name, time.Now()); err != nil {
 				return errMsg{err}
@@ -917,11 +981,15 @@ func (m model) handleHabitDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		h := m.habits[m.cursor].Habit
 		m.editOldName = h.Name
 		m.editCursor = 0
-		m.state = viewEditHabit
+		m.editDescBuf = h.Description
+		m.editFreq = h.FreqTarget
+		m.editSkip = h.SkipAllowed
 		combined := h.Name
 		if h.Icon != "" {
 			combined = h.Icon + " " + h.Name
 		}
+		m.editNameBuf = combined
+		m.state = viewEditHabit
 		m.input.Reset()
 		m.input.SetValue(combined)
 		m.input.CursorEnd()
@@ -1021,8 +1089,10 @@ func (m model) handleChainMgr(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.suggestText = ""
 		m.suggestDone = false
 		m.suggestItems = nil
+		m.chainSuggestItems = nil
 		m.suggestCursor = 0
 		m.suggestGen++
+		m.suggestMode = "chain"
 		rch := make(chan suggestChunkResult, 64)
 		m.suggestCh = rch
 		gen := m.suggestGen
@@ -1119,8 +1189,14 @@ func (m model) handleSuggest(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.state = viewList
 
 	case "j", "down":
-		if m.suggestCursor < len(m.suggestItems)-1 {
-			m.suggestCursor++
+		if m.suggestMode == "chain" {
+			if m.suggestCursor < len(m.chainSuggestItems)-1 {
+				m.suggestCursor++
+			}
+		} else {
+			if m.suggestCursor < len(m.suggestItems)-1 {
+				m.suggestCursor++
+			}
 		}
 
 	case "k", "up":
@@ -1129,25 +1205,71 @@ func (m model) handleSuggest(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case " ":
-		if m.suggestCursor < len(m.suggestItems) {
-			m.suggestItems[m.suggestCursor].selected = !m.suggestItems[m.suggestCursor].selected
+		if m.suggestMode == "chain" {
+			if m.suggestCursor < len(m.chainSuggestItems) {
+				m.chainSuggestItems[m.suggestCursor].selected = !m.chainSuggestItems[m.suggestCursor].selected
+			}
+		} else {
+			if m.suggestCursor < len(m.suggestItems) {
+				m.suggestItems[m.suggestCursor].selected = !m.suggestItems[m.suggestCursor].selected
+			}
 		}
 
 	case "a":
-		// Toggle all: if any are unselected, select all; else deselect all.
-		anyUnselected := false
-		for _, it := range m.suggestItems {
-			if !it.selected {
-				anyUnselected = true
-				break
+		if m.suggestMode == "chain" {
+			anyUnselected := false
+			for _, it := range m.chainSuggestItems {
+				if !it.selected {
+					anyUnselected = true
+					break
+				}
 			}
-		}
-		for i := range m.suggestItems {
-			m.suggestItems[i].selected = anyUnselected
+			for i := range m.chainSuggestItems {
+				m.chainSuggestItems[i].selected = anyUnselected
+			}
+		} else {
+			anyUnselected := false
+			for _, it := range m.suggestItems {
+				if !it.selected {
+					anyUnselected = true
+					break
+				}
+			}
+			for i := range m.suggestItems {
+				m.suggestItems[i].selected = anyUnselected
+			}
 		}
 
 	case "enter":
-		// Add all selected items; if none selected, add the current one.
+		if m.suggestMode == "chain" {
+			var toApply []chainSuggestItem
+			for _, it := range m.chainSuggestItems {
+				if it.selected {
+					toApply = append(toApply, it)
+				}
+			}
+			if len(toApply) == 0 && m.suggestCursor < len(m.chainSuggestItems) {
+				toApply = []chainSuggestItem{m.chainSuggestItems[m.suggestCursor]}
+			}
+			if len(toApply) == 0 {
+				break
+			}
+			s := m.s
+			items := make([]chainSuggestItem, len(toApply))
+			copy(items, toApply)
+			m.state = viewChainMgr
+			return m, func() tea.Msg {
+				var created []string
+				for _, it := range items {
+					if err := s.AddChain(it.from, it.to); err != nil {
+						return errMsg{err}
+					}
+					created = append(created, it.from+" → "+it.to)
+				}
+				return statusMsg("Ketten erstellt: " + strings.Join(created, ", "))
+			}
+		}
+		// habit suggest mode
 		var toAdd []suggestItem
 		for _, it := range m.suggestItems {
 			if it.selected {
@@ -1188,11 +1310,12 @@ func (m model) handleSuggest(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case "n":
-		// Manual add with empty input
-		m.state = viewAddInput
-		m.input.Reset()
-		m.input.Placeholder = "Habit (optional: 🏃 Morning run)"
-		m.input.Focus()
+		if m.suggestMode != "chain" {
+			m.state = viewAddInput
+			m.input.Reset()
+			m.input.Placeholder = "Habit (optional: 🏃 Morning run)"
+			m.input.Focus()
+		}
 	}
 	return m, nil
 }
@@ -1621,15 +1744,30 @@ func (m model) renderList() string {
 			nameCol := lipgloss.NewStyle().Width(nameW).Render(ns.Render(rawName))
 
 			var skContent string
-			switch {
-			case h.CheckedToday && h.Streak > 0:
-				skContent = styleOkBold.Render(fmt.Sprintf("🔥 %d", h.Streak))
-			case atRisk:
-				skContent = styleWarnBd.Render(fmt.Sprintf("🔥 %d!", h.Streak))
-			case h.Streak > 0:
-				skContent = styleMuted.Render(fmt.Sprintf("%d", h.Streak))
-			default:
-				skContent = styleMuted.Render("0")
+			if h.Habit.FreqTarget > 0 {
+				// weekly habit: show "done/target W" + streak weeks
+				weekInfo := fmt.Sprintf("%d/%dW", h.WeeklyDone, h.Habit.FreqTarget)
+				switch {
+				case h.CheckedToday && h.Streak > 0:
+					skContent = styleOkBold.Render("🔥 "+weekInfo) + styleMuted.Render(fmt.Sprintf(" %dw", h.Streak))
+				case h.CheckedToday:
+					skContent = styleOk.Render(weekInfo)
+				case h.WeeklyDone > 0:
+					skContent = styleWarn.Render(weekInfo)
+				default:
+					skContent = styleMuted.Render(weekInfo)
+				}
+			} else {
+				switch {
+				case h.CheckedToday && h.Streak > 0:
+					skContent = styleOkBold.Render(fmt.Sprintf("🔥 %d", h.Streak))
+				case atRisk:
+					skContent = styleWarnBd.Render(fmt.Sprintf("🔥 %d!", h.Streak))
+				case h.Streak > 0:
+					skContent = styleMuted.Render(fmt.Sprintf("%d", h.Streak))
+				default:
+					skContent = styleMuted.Render("0")
+				}
 			}
 			skCol := lipgloss.NewStyle().Width(skW).Align(lipgloss.Right).Render(skContent)
 
@@ -1717,27 +1855,82 @@ func (m model) renderAddDesc() string {
 
 func (m model) renderEditHabit() string {
 	var b strings.Builder
-	var h models.Habit
-	for _, hs := range m.habits {
-		if hs.Habit.Name == m.editOldName {
-			h = hs.Habit
-			break
-		}
-	}
-
 	b.WriteString(styleLime.Bold(true).Render("Habit bearbeiten") + "\n\n")
 
-	if m.editCursor == 0 {
-		b.WriteString(styleLime.Render("▶ ") + styleFg.Render("Name / Icon") + "\n")
-		b.WriteString("  " + m.input.View() + "\n\n")
-		b.WriteString(styleMuted.Render("  Notiz: ") + styleMuted.Render(h.Description) + "\n")
-	} else {
-		b.WriteString(styleMuted.Render("  Name: ") + styleFg.Render(h.Icon+" "+h.Name) + "\n\n")
-		b.WriteString(styleLime.Render("▶ ") + styleFg.Render("Notiz") + "\n")
-		b.WriteString("  " + m.input.View() + "\n")
+	row := func(active bool, label, value string) {
+		cursor := "  "
+		ls := styleMuted
+		vs := styleMuted
+		if active {
+			cursor = styleLime.Render("▶ ")
+			ls = styleFg
+			vs = styleFg.Bold(true)
+		}
+		b.WriteString(cursor + ls.Render(label+":") + "  " + vs.Render(value) + "\n")
 	}
 
-	b.WriteString("\n" + styleMuted.Render("enter speichern · tab anderes Feld · esc abbrechen"))
+	switch m.editCursor {
+	case 0:
+		b.WriteString(styleLime.Render("▶ ") + styleFg.Render("Name / Icon:") + "\n")
+		b.WriteString("    " + m.input.View() + "\n\n")
+		row(false, "Beschreibung", m.editDescBuf)
+	case 1:
+		row(false, "Name / Icon", m.editNameBuf)
+		b.WriteString("\n")
+		b.WriteString(styleLime.Render("▶ ") + styleFg.Render("Beschreibung:") + "\n")
+		b.WriteString("    " + m.input.View() + "\n")
+	default:
+		row(false, "Name / Icon", m.editNameBuf)
+		row(false, "Beschreibung", m.editDescBuf)
+	}
+
+	b.WriteString("\n")
+
+	freqActive := m.editCursor == 2
+	skipActive := m.editCursor == 3
+
+	freqCursor := "  "
+	freqStyle := styleMuted
+	if freqActive {
+		freqCursor = styleLime.Render("▶ ")
+		freqStyle = styleFg
+	}
+	freqVal := "täglich"
+	if m.editFreq > 0 {
+		freqVal = fmt.Sprintf("%d× pro Woche", m.editFreq)
+	}
+	b.WriteString(freqCursor + freqStyle.Render("Häufigkeit:") + "  ")
+	if freqActive {
+		b.WriteString(styleFg.Bold(true).Render(freqVal) + "  " + styleMuted.Render("+/- ändern"))
+	} else {
+		b.WriteString(styleMuted.Render(freqVal))
+	}
+	b.WriteString("\n")
+
+	skipCursor := "  "
+	skipStyle := styleMuted
+	if skipActive {
+		skipCursor = styleLime.Render("▶ ")
+		skipStyle = styleFg
+	}
+	skipVal := "kein Skip"
+	if m.editSkip > 0 {
+		skipVal = fmt.Sprintf("%d Fehltag%s ok", m.editSkip, func() string {
+			if m.editSkip == 1 {
+				return ""
+			}
+			return "e"
+		}())
+	}
+	b.WriteString(skipCursor + skipStyle.Render("Skip-Toleranz:") + "  ")
+	if skipActive {
+		b.WriteString(styleFg.Bold(true).Render(skipVal) + "  " + styleMuted.Render("+/- ändern"))
+	} else {
+		b.WriteString(styleMuted.Render(skipVal))
+	}
+	b.WriteString("\n")
+
+	b.WriteString("\n" + styleMuted.Render("enter speichern · tab nächstes Feld · +/- bei Zahlen · esc abbrechen"))
 	return panelStyle.Render(b.String())
 }
 
@@ -2011,12 +2204,69 @@ func (m model) renderSuggest() string {
 	} else {
 		providerLabel = styleWarn.Render("kein Provider — S für Settings")
 	}
+
+	if m.suggestMode == "chain" {
+		b.WriteString(styleLime.Bold(true).Render("Ketten-Vorschläge") + "  " + providerLabel + "\n\n")
+
+		if len(m.chainSuggestItems) > 0 {
+			checkOff := styleMuted.Render("[ ]")
+			checkOn := styleOk.Bold(true).Render("[✓]")
+			indent := "       "
+
+			for i, it := range m.chainSuggestItems {
+				if i > 0 {
+					b.WriteString("\n")
+				}
+				selected := i == m.suggestCursor
+				cursor := "  "
+				nameStyle := styleMuted
+				if selected {
+					cursor = styleLime.Render("▶ ")
+					nameStyle = styleFg.Bold(true)
+				}
+				chk := checkOff
+				if it.selected {
+					chk = checkOn
+				}
+				b.WriteString(cursor + chk + " " + nameStyle.Render(it.from) +
+					styleMuted.Render(" → ") + nameStyle.Render(it.to) + "\n")
+				if it.reason != "" {
+					for _, wl := range strings.Split(wordWrap(it.reason, 62), "\n") {
+						if wl != "" {
+							b.WriteString(indent + styleMuted.Render(wl) + "\n")
+						}
+					}
+				}
+			}
+
+			b.WriteString("\n")
+			selectedCount := 0
+			for _, it := range m.chainSuggestItems {
+				if it.selected {
+					selectedCount++
+				}
+			}
+			if selectedCount > 0 {
+				b.WriteString(styleOk.Render(fmt.Sprintf("%d ausgewählt", selectedCount)) + "  ")
+			}
+			b.WriteString(styleMuted.Render("space ✓ · enter anwenden · a alle · j/k · esc zurück"))
+		} else if !m.suggestDone {
+			b.WriteString(styleMuted.Render("Analysiere Habit-Verbindungen…") + "\n\n")
+			b.WriteString(styleLime.Render("▌"))
+		} else {
+			b.WriteString(styleWarn.Render("Keine Vorschläge. Mindestens 2 Habits brauche ich.") + "\n")
+			b.WriteString(styleMuted.Render("esc zurück"))
+		}
+		return panelStyle.Render(b.String())
+	}
+
+	// ── habit suggest mode ────────────────────────────────────────────────────
 	b.WriteString(styleLime.Bold(true).Render("Habit-Vorschläge") + "  " + providerLabel + "\n\n")
 
 	if len(m.suggestItems) > 0 {
 		checkOff := styleMuted.Render("[ ]")
 		checkOn := styleOk.Bold(true).Render("[✓]")
-		indent := "       " // 7 chars: "  [ ]  " width
+		indent := "       "
 
 		for i, it := range m.suggestItems {
 			if i > 0 {
@@ -2058,11 +2308,9 @@ func (m model) renderSuggest() string {
 		}
 		b.WriteString(styleMuted.Render("space ✓ · enter hinzufügen · a alle · j/k · esc zurück"))
 	} else if !m.suggestDone {
-		// Streaming in progress — don't show raw markdown
 		b.WriteString(styleMuted.Render("Generiere Vorschläge…") + "\n\n")
 		b.WriteString(styleLime.Render("▌"))
 	} else {
-		// Done but parse returned nothing — show error
 		b.WriteString(styleWarn.Render("Format nicht erkannt.") + "\n")
 		b.WriteString(styleMuted.Render("s   nochmal versuchen") + "\n")
 		b.WriteString(styleMuted.Render("n   manuell hinzufügen") + "\n")
@@ -2367,9 +2615,24 @@ func (m model) renderHabitDetail() string {
 	b.WriteString("\n")
 	num := styleLime.Bold(true)
 	lbl := styleMuted
-	b.WriteString(ind + num.Render(fmt.Sprintf("%d", h.Streak)) + " " + lbl.Render("Streak") +
-		"   " + num.Render(fmt.Sprintf("%d", h.LongestStreak)) + " " + lbl.Render("Längster") +
-		"   " + num.Render(fmt.Sprintf("%d", h.TotalDays)) + " " + lbl.Render("Tage/30") + "\n")
+	if habit.FreqTarget > 0 {
+		b.WriteString(ind + num.Render(fmt.Sprintf("%d/%d", h.WeeklyDone, habit.FreqTarget)) +
+			" " + lbl.Render("diese Woche") +
+			"   " + num.Render(fmt.Sprintf("%d", h.Streak)) + " " + lbl.Render("Wochen-Streak") + "\n")
+		b.WriteString(ind + lbl.Render(fmt.Sprintf("📅 %d× pro Woche", habit.FreqTarget)) + "\n")
+	} else {
+		b.WriteString(ind + num.Render(fmt.Sprintf("%d", h.Streak)) + " " + lbl.Render("Streak") +
+			"   " + num.Render(fmt.Sprintf("%d", h.LongestStreak)) + " " + lbl.Render("Längster") +
+			"   " + num.Render(fmt.Sprintf("%d", h.TotalDays)) + " " + lbl.Render("Tage/30") + "\n")
+	}
+	if habit.SkipAllowed > 0 {
+		b.WriteString(ind + lbl.Render(fmt.Sprintf("⏭ %d Skip%s erlaubt", habit.SkipAllowed, func() string {
+			if habit.SkipAllowed == 1 {
+				return ""
+			}
+			return "s"
+		}())) + "\n")
+	}
 
 	// ── chain ─────────────────────────────────────────────────────────────────
 	if h.ChainTo != "" {
@@ -2688,6 +2951,34 @@ func parseSuggestions(text string) []suggestItem {
 			details = append(details, "Tipp: "+tipp)
 		}
 		items = append(items, suggestItem{name: name, header: header, details: details})
+	}
+	return items
+}
+
+// parseChainSuggestions parses the Von:/Zu:/Warum: block format from SuggestChains.
+func parseChainSuggestions(text string) []chainSuggestItem {
+	var items []chainSuggestItem
+	for _, block := range strings.Split(text, "###") {
+		block = strings.TrimSpace(block)
+		if block == "" {
+			continue
+		}
+		var von, zu, warum string
+		for _, raw := range strings.Split(block, "\n") {
+			line := strings.TrimSpace(raw)
+			switch {
+			case strings.HasPrefix(line, "Von:"):
+				von = strings.TrimSpace(strings.TrimPrefix(line, "Von:"))
+			case strings.HasPrefix(line, "Zu:"):
+				zu = strings.TrimSpace(strings.TrimPrefix(line, "Zu:"))
+			case strings.HasPrefix(line, "Warum:"):
+				warum = strings.TrimSpace(strings.TrimPrefix(line, "Warum:"))
+			}
+		}
+		if von == "" || zu == "" {
+			continue
+		}
+		items = append(items, chainSuggestItem{from: von, to: zu, reason: warum})
 	}
 	return items
 }

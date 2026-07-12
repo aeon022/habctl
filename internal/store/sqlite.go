@@ -107,6 +107,8 @@ func (s *Store) runMigrations() error {
 			to_id   INTEGER NOT NULL REFERENCES habits(id) ON DELETE CASCADE,
 			UNIQUE(from_id, to_id)
 		)`},
+		{6, `ALTER TABLE habits ADD COLUMN freq_target  INTEGER NOT NULL DEFAULT 0`},
+		{7, `ALTER TABLE habits ADD COLUMN skip_allowed INTEGER NOT NULL DEFAULT 0`},
 	}
 	for _, m := range migrations {
 		var n int
@@ -173,7 +175,8 @@ func (s *Store) SetHabitGroup(habitName string, groupID int64) error {
 // ListHabits returns all habits ordered by group sort_order then creation time.
 func (s *Store) ListHabits() ([]models.Habit, error) {
 	rows, err := s.db.Query(`
-		SELECT h.id, h.name, h.description, h.icon, COALESCE(h.group_id, 0), h.created_at
+		SELECT h.id, h.name, h.description, h.icon,
+		       COALESCE(h.group_id, 0), h.freq_target, h.skip_allowed, h.created_at
 		FROM habits h
 		LEFT JOIN groups g ON h.group_id = g.id
 		ORDER BY COALESCE(g.sort_order, 999999), h.created_at ASC
@@ -186,7 +189,8 @@ func (s *Store) ListHabits() ([]models.Habit, error) {
 	for rows.Next() {
 		var h models.Habit
 		var createdStr string
-		if err := rows.Scan(&h.ID, &h.Name, &h.Description, &h.Icon, &h.GroupID, &createdStr); err != nil {
+		if err := rows.Scan(&h.ID, &h.Name, &h.Description, &h.Icon,
+			&h.GroupID, &h.FreqTarget, &h.SkipAllowed, &createdStr); err != nil {
 			return nil, err
 		}
 		h.CreatedAt, _ = time.Parse(tsLayout, createdStr)
@@ -197,9 +201,42 @@ func (s *Store) ListHabits() ([]models.Habit, error) {
 
 // ── check-ins ────────────────────────────────────────────────────────────────
 
-// CheckIn records a check-in for the named habit on the given date (no note).
+// CheckIn records a check-in for today. Does not overwrite an existing note.
 func (s *Store) CheckIn(name string, date time.Time) error {
-	return s.CheckInWithNote(name, date, "")
+	var habitID int64
+	if err := s.db.QueryRow(`SELECT id FROM habits WHERE name = ?`, name).Scan(&habitID); err != nil {
+		return fmt.Errorf("habit %q not found", name)
+	}
+	_, err := s.db.Exec(
+		`INSERT OR IGNORE INTO checkins (habit_id, date, note, created_at) VALUES (?, ?, '', ?)`,
+		habitID, date.Format(dateLayout), time.Now().Format(tsLayout),
+	)
+	return err
+}
+
+// DeleteCheckIn removes a check-in for the given habit and date (undo).
+func (s *Store) DeleteCheckIn(name string, date time.Time) error {
+	var habitID int64
+	if err := s.db.QueryRow(`SELECT id FROM habits WHERE name = ?`, name).Scan(&habitID); err != nil {
+		return fmt.Errorf("habit %q not found", name)
+	}
+	_, err := s.db.Exec(
+		`DELETE FROM checkins WHERE habit_id = ? AND date = ?`,
+		habitID, date.Format(dateLayout),
+	)
+	return err
+}
+
+// SetHabitFreq sets the weekly frequency target (0 = daily, N = N times per week).
+func (s *Store) SetHabitFreq(name string, freq int) error {
+	_, err := s.db.Exec(`UPDATE habits SET freq_target = ? WHERE name = ?`, freq, name)
+	return err
+}
+
+// SetHabitSkip sets how many consecutive missed days are allowed before the streak breaks.
+func (s *Store) SetHabitSkip(name string, skip int) error {
+	_, err := s.db.Exec(`UPDATE habits SET skip_allowed = ? WHERE name = ?`, skip, name)
+	return err
 }
 
 // CheckInWithNote records a check-in and attaches an optional coaching note.
@@ -249,8 +286,9 @@ func (s *Store) GetStats(name string, days int) (models.HabitStats, error) {
 	var h models.Habit
 	var createdStr string
 	err := s.db.QueryRow(
-		`SELECT id, name, description, icon, COALESCE(group_id,0), created_at FROM habits WHERE name = ?`, name,
-	).Scan(&h.ID, &h.Name, &h.Description, &h.Icon, &h.GroupID, &createdStr)
+		`SELECT id, name, description, icon, COALESCE(group_id,0), freq_target, skip_allowed, created_at
+		 FROM habits WHERE name = ?`, name,
+	).Scan(&h.ID, &h.Name, &h.Description, &h.Icon, &h.GroupID, &h.FreqTarget, &h.SkipAllowed, &createdStr)
 	if err != nil {
 		return models.HabitStats{}, fmt.Errorf("habit %q not found", name)
 	}
@@ -303,40 +341,88 @@ func (s *Store) computeStats(h models.Habit, days int) (models.HabitStats, error
 	today := truncateToDay(time.Now())
 	todayStr := today.Format(dateLayout)
 
-	streak := 0
-	for i := 0; ; i++ {
-		if !dateSet[today.AddDate(0, 0, -i).Format(dateLayout)] {
-			break
+	// ── monday helper ─────────────────────────────────────────────────────────
+	mondayOf := func(t time.Time) time.Time {
+		wd := int(t.Weekday())
+		if wd == 0 {
+			wd = 7
 		}
-		streak++
+		return truncateToDay(t.AddDate(0, 0, -(wd - 1)))
 	}
 
-	longestStreak := 0
-	if len(dates) > 0 {
-		cur := 1
-		for i := 1; i < len(dates); i++ {
-			prev, _ := time.ParseInLocation(dateLayout, dates[i-1], time.Local)
-			curr, _ := time.ParseInLocation(dateLayout, dates[i], time.Local)
-			if prev.AddDate(0, 0, -1).Equal(curr) {
-				cur++
+	// ── streak ────────────────────────────────────────────────────────────────
+	var streak, longestStreak, weeklyDone int
+	var checkedToday bool
+
+	if h.FreqTarget > 0 {
+		// weekly habit: streak = consecutive weeks meeting target
+		thisMonday := mondayOf(today)
+		for d := thisMonday; !d.After(today); d = d.AddDate(0, 0, 1) {
+			if dateSet[d.Format(dateLayout)] {
+				weeklyDone++
+			}
+		}
+		checkedToday = weeklyDone >= h.FreqTarget
+		if checkedToday {
+			streak = 1
+		}
+		for w := 1; ; w++ {
+			wStart := thisMonday.AddDate(0, 0, -w*7)
+			cnt := 0
+			for d := wStart; d.Before(wStart.AddDate(0, 0, 7)); d = d.AddDate(0, 0, 1) {
+				if dateSet[d.Format(dateLayout)] {
+					cnt++
+				}
+			}
+			if cnt < h.FreqTarget {
+				break
+			}
+			streak++
+		}
+		longestStreak = streak // simplified: longest = current for now
+	} else {
+		// daily habit (with optional skip forgiveness)
+		checkedToday = dateSet[todayStr]
+		consecutiveMisses := 0
+		for i := 0; ; i++ {
+			if dateSet[today.AddDate(0, 0, -i).Format(dateLayout)] {
+				streak++
+				consecutiveMisses = 0
 			} else {
-				cur = 1
+				consecutiveMisses++
+				if consecutiveMisses > h.SkipAllowed {
+					break
+				}
+			}
+		}
+		// longest streak (no skip logic for simplicity)
+		if len(dates) > 0 {
+			cur := 1
+			for i := 1; i < len(dates); i++ {
+				prev, _ := time.ParseInLocation(dateLayout, dates[i-1], time.Local)
+				curr, _ := time.ParseInLocation(dateLayout, dates[i], time.Local)
+				if prev.AddDate(0, 0, -1).Equal(curr) {
+					cur++
+				} else {
+					cur = 1
+				}
+				if cur > longestStreak {
+					longestStreak = cur
+				}
 			}
 			if cur > longestStreak {
 				longestStreak = cur
 			}
+			if longestStreak < 1 {
+				longestStreak = 1
+			}
 		}
-		if cur > longestStreak {
-			longestStreak = cur
+		if streak > longestStreak {
+			longestStreak = streak
 		}
-		if longestStreak < 1 {
-			longestStreak = 1
-		}
-	}
-	if streak > longestStreak {
-		longestStreak = streak
 	}
 
+	// ── totals ────────────────────────────────────────────────────────────────
 	windowStart := today.AddDate(0, 0, -(days - 1))
 	totalDays := 0
 	for i := 0; i < days; i++ {
@@ -379,10 +465,11 @@ func (s *Store) computeStats(h models.Habit, days int) (models.HabitStats, error
 		LongestStreak: longestStreak,
 		TotalDays:     totalDays,
 		LastCheckIn:   lastCheckIn,
-		CheckedToday:  dateSet[todayStr],
+		CheckedToday:  checkedToday,
 		Last7Days:     last7,
 		ChainTo:       chainTo,
 		TodayNote:     todayNote,
+		WeeklyDone:    weeklyDone,
 	}, nil
 }
 

@@ -26,6 +26,10 @@ func Serve() error {
 	s.AddTool(toolStreakAtRisk(), handleStreakAtRisk)
 	s.AddTool(toolWeeklySummary(), handleWeeklySummary)
 	s.AddTool(toolSuggestHabits(), handleSuggestHabits)
+	s.AddTool(toolAddCheckinNote(), handleAddCheckinNote)
+	s.AddTool(toolUncheckHabit(), handleUncheckHabit)
+	s.AddTool(toolListChains(), handleListChains)
+	s.AddTool(toolGetWeeklyReview(), handleGetWeeklyReview)
 	return server.ServeStdio(s)
 }
 
@@ -85,6 +89,35 @@ func toolSuggestHabits() mcp.Tool {
 		mcp.WithDescription("Use AI to suggest new habits based on the user's goals and existing habits. Good for onboarding or when the user asks for ideas."),
 		mcp.WithString("routine", mcp.Description("Focus area: morning, evening, health, learning, productivity (optional)")),
 		mcp.WithString("goal", mcp.Description("User's goal in their own words, e.g. 'mehr Energie am Morgen'")),
+	)
+}
+
+func toolAddCheckinNote() mcp.Tool {
+	return mcp.NewTool("add_checkin_note",
+		mcp.WithDescription("Add or update a text note on today's (or a specific date's) check-in for a habit. The habit must already be checked in for that date."),
+		mcp.WithString("name", mcp.Required(), mcp.Description("Habit name")),
+		mcp.WithString("note", mcp.Required(), mcp.Description("The note text (pass empty string to clear)")),
+		mcp.WithString("date", mcp.Description("Date in YYYY-MM-DD format (defaults to today)")),
+	)
+}
+
+func toolUncheckHabit() mcp.Tool {
+	return mcp.NewTool("uncheck_habit",
+		mcp.WithDescription("Remove a check-in for a habit (undo). Use this to correct accidental check-ins."),
+		mcp.WithString("name", mcp.Required(), mcp.Description("Habit name")),
+		mcp.WithString("date", mcp.Description("Date in YYYY-MM-DD format (defaults to today)")),
+	)
+}
+
+func toolListChains() mcp.Tool {
+	return mcp.NewTool("list_chains",
+		mcp.WithDescription("List all habit chains — pairs of habits where completing the first suggests doing the second immediately after."),
+	)
+}
+
+func toolGetWeeklyReview() mcp.Tool {
+	return mcp.NewTool("get_weekly_review",
+		mcp.WithDescription("Get detailed per-habit data for the last 7 days and 30 days, including completion rates and recent notes. Use this as input for a coaching briefing."),
 	)
 }
 
@@ -364,6 +397,126 @@ func handleSuggestHabits(_ context.Context, req mcp.CallToolRequest) (*mcp.CallT
 	}
 
 	return mcp.NewToolResultText(result), nil
+}
+
+func handleAddCheckinNote(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	name := req.GetString("name", "")
+	note := req.GetString("note", "")
+	dateStr := req.GetString("date", "")
+
+	if name == "" {
+		return mcp.NewToolResultError("name is required"), nil
+	}
+
+	date := time.Now()
+	if dateStr != "" {
+		parsed, err := time.ParseInLocation("2006-01-02", dateStr, time.Local)
+		if err != nil {
+			return mcp.NewToolResultError("invalid date format, expected YYYY-MM-DD"), nil
+		}
+		date = parsed
+	}
+
+	st, err := openStore()
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	defer st.Close()
+
+	if err := st.CheckInWithNote(name, date, note); err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	if note == "" {
+		return mcp.NewToolResultText(fmt.Sprintf("Note cleared for %s on %s.", name, date.Format("2006-01-02"))), nil
+	}
+	return mcp.NewToolResultText(fmt.Sprintf("Note saved for %s: %q", name, note)), nil
+}
+
+func handleUncheckHabit(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	name := req.GetString("name", "")
+	dateStr := req.GetString("date", "")
+
+	if name == "" {
+		return mcp.NewToolResultError("name is required"), nil
+	}
+
+	date := time.Now()
+	if dateStr != "" {
+		parsed, err := time.ParseInLocation("2006-01-02", dateStr, time.Local)
+		if err != nil {
+			return mcp.NewToolResultError("invalid date format, expected YYYY-MM-DD"), nil
+		}
+		date = parsed
+	}
+
+	st, err := openStore()
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	defer st.Close()
+
+	if err := st.DeleteCheckIn(name, date); err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	return mcp.NewToolResultText(fmt.Sprintf("Removed check-in for %s on %s.", name, date.Format("2006-01-02"))), nil
+}
+
+func handleListChains(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	st, err := openStore()
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	defer st.Close()
+
+	chains, err := st.ListChains()
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	if len(chains) == 0 {
+		return mcp.NewToolResultText("No habit chains defined. Use the TUI (c key) to create chains."), nil
+	}
+
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("Habit Chains (%d):\n\n", len(chains)))
+	for _, ch := range chains {
+		b.WriteString(fmt.Sprintf("  %s → %s\n", ch.FromName, ch.ToName))
+	}
+	return mcp.NewToolResultText(b.String()), nil
+}
+
+func handleGetWeeklyReview(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	st, err := openStore()
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	defer st.Close()
+
+	data, err := st.GetWeeklyReview()
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	if len(data.Habits) == 0 {
+		return mcp.NewToolResultText("No habits tracked yet."), nil
+	}
+
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("Weekly Review — %d habits  ·  %d perfect days this week\n\n", len(data.Habits), data.PerfectDays))
+	for _, h := range data.Habits {
+		b.WriteString(fmt.Sprintf("%s %s\n", h.Icon, h.Name))
+		b.WriteString(fmt.Sprintf("  7d: %d check-ins (%.0f%%)  |  30d: %d check-ins (%.0f%%)  |  streak: %d\n",
+			h.DoneThisWeek, h.CompletionPct7*100,
+			h.DoneLast30, h.CompletionPct30*100,
+			h.CurrentStreak))
+		for _, n := range h.RecentNotes {
+			b.WriteString(fmt.Sprintf("  [%s] %s\n", n.Date, n.Note))
+		}
+		b.WriteString("\n")
+	}
+	return mcp.NewToolResultText(b.String()), nil
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

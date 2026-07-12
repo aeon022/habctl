@@ -18,6 +18,8 @@ type Habit struct {
 	Description string
 	Icon        string
 	GroupID     int64
+	FreqTarget  int // 0 = daily, N = N times per week
+	SkipAllowed int // consecutive missed days before streak breaks (0 = none)
 	CreatedAt   time.Time
 }
 
@@ -53,10 +55,11 @@ type HabitStats struct {
 	LongestStreak int
 	TotalDays     int
 	LastCheckIn   *time.Time
-	CheckedToday  bool
-	Last7Days     [7]bool // [0] = 6 days ago, [6] = today
-	ChainTo       string  // name of chained follow-up habit (empty if none)
-	TodayNote     string  // note for today's check-in (empty if none)
+	CheckedToday  bool   // for weekly habits: true when week's target is met
+	Last7Days     [7]bool
+	ChainTo       string // name of chained follow-up habit (empty if none)
+	TodayNote     string // note for today's check-in (empty if none)
+	WeeklyDone    int    // check-ins this week (only meaningful when FreqTarget > 0)
 }
 
 // HabitWeekData is one habit's contribution to a WeeklyReview.
