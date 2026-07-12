@@ -78,10 +78,11 @@ const (
 	viewGroupMgr   // manage groups list
 	viewGroupNew   // create new group (name + icon)
 	viewGroupPick  // assign a habit to a group
-	viewReview     // weekly AI coaching briefing
-	viewNoteInput  // add/edit note for today's check-in
-	viewChainMgr   // manage habit chains
-	viewChainPick  // pick target habit when creating a chain
+	viewHabitDetail // full habit detail / expand view
+	viewReview      // weekly AI coaching briefing
+	viewNoteInput   // add/edit note for today's check-in
+	viewChainMgr    // manage habit chains
+	viewChainPick   // pick target habit when creating a chain
 	viewGeminiMenu
 	viewGeminiCID
 	viewGeminiCS
@@ -336,6 +337,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleGroupNew(msg)
 		case viewGroupPick:
 			return m.handleGroupPick(msg)
+		case viewHabitDetail:
+			return m.handleHabitDetail(msg)
 		case viewReview:
 			return m.handleReview(msg)
 		case viewNoteInput:
@@ -387,7 +390,7 @@ func (m model) handleList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.cursor--
 		}
 
-	case " ", "enter":
+	case " ":
 		if len(m.habits) == 0 {
 			break
 		}
@@ -411,6 +414,12 @@ func (m model) handleList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return statusMsg(out)
 		}
+
+	case "enter":
+		if len(m.habits) == 0 {
+			break
+		}
+		m.state = viewHabitDetail
 
 	case "w":
 		m.weekView = !m.weekView
@@ -850,6 +859,74 @@ func (m model) handleGroupPick(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return statusMsg("✓ Gruppe zugewiesen")
 		}
+	}
+	return m, nil
+}
+
+func (m model) handleHabitDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+	case "esc", "q", "enter":
+		m.state = viewList
+	case " ":
+		if len(m.habits) == 0 {
+			break
+		}
+		h := m.habits[m.cursor]
+		name := h.Habit.Name
+		s := m.s
+		m.state = viewList
+		return m, func() tea.Msg {
+			if err := s.CheckIn(name, time.Now()); err != nil {
+				return errMsg{err}
+			}
+			stats, err := s.GetStats(name, 30)
+			if err != nil {
+				return statusMsg(fmt.Sprintf("✓ %s", name))
+			}
+			out := fmt.Sprintf("✓ %s (streak: %d)", name, stats.Streak)
+			if stats.Streak >= 7 {
+				out += " 🔥"
+			}
+			if ms := streakMilestone(stats.Streak); ms != "" {
+				out += "  " + ms
+			}
+			return statusMsg(out)
+		}
+	case "N":
+		if len(m.habits) == 0 {
+			break
+		}
+		h := m.habits[m.cursor]
+		if !h.CheckedToday {
+			break
+		}
+		m.noteForHabit = h.Habit.Name
+		m.state = viewNoteInput
+		m.input.Reset()
+		m.input.SetValue(h.TodayNote)
+		m.input.CursorEnd()
+		m.input.Placeholder = "Notiz für heute…"
+		m.input.CharLimit = 200
+		m.input.Focus()
+	case "e":
+		if len(m.habits) == 0 {
+			break
+		}
+		h := m.habits[m.cursor].Habit
+		m.editOldName = h.Name
+		m.editCursor = 0
+		m.state = viewEditHabit
+		combined := h.Name
+		if h.Icon != "" {
+			combined = h.Icon + " " + h.Name
+		}
+		m.input.Reset()
+		m.input.SetValue(combined)
+		m.input.CursorEnd()
+		m.input.Placeholder = ""
+		m.input.Focus()
 	}
 	return m, nil
 }
@@ -1325,6 +1402,8 @@ func (m model) View() string {
 		return m.renderGroupNew()
 	case viewGroupPick:
 		return m.renderGroupPick()
+	case viewHabitDetail:
+		return m.renderHabitDetail()
 	case viewReview:
 		return m.renderReview()
 	case viewNoteInput:
@@ -1579,7 +1658,7 @@ func (m model) renderList() string {
 	}
 
 	b.WriteString(styleMuted.Render(
-		"space ✓ · N notiz · n neu · e edit · m gruppe · c ketten · s KI · r review · t stats · ? help · q quit"))
+		"space ✓ · enter detail · N notiz · n neu · e edit · m gruppe · c ketten · s KI · r review · t stats · ? help · q quit"))
 	return panelStyle.Render(b.String())
 }
 
@@ -2176,7 +2255,8 @@ func (m model) renderHelp() string {
 	b.WriteString(row("j / ↓", "move down"))
 	b.WriteString(row("k / ↑", "move up"))
 	b.WriteString(section("Habits"))
-	b.WriteString(row("space / enter", "check in today"))
+	b.WriteString(row("space", "check in today"))
+	b.WriteString(row("enter", "Habit öffnen (Detail, Beschreibung, History)"))
 	b.WriteString(row("N", "Notiz zu heutigem Check-in hinzufügen"))
 	b.WriteString(row("n", "neuen Habit anlegen (+ optionales Emoji)"))
 	b.WriteString(row("e", "Name + Icon bearbeiten"))
@@ -2200,6 +2280,110 @@ func (m model) renderHelp() string {
 	b.WriteString(row("?", "toggle this help screen"))
 	b.WriteString(row("q / ctrl+c", "quit"))
 	b.WriteString("\n  " + styleMuted.Render("esc / ?   close help"))
+	return panelStyle.Render(b.String())
+}
+
+// ── renderHabitDetail ─────────────────────────────────────────────────────────
+
+func (m model) renderHabitDetail() string {
+	if len(m.habits) == 0 {
+		return panelStyle.Render(styleMuted.Render("Kein Habit ausgewählt."))
+	}
+	h := m.habits[m.cursor]
+	habit := h.Habit
+
+	var b strings.Builder
+
+	// ── title ──────────────────────────────────────────────────────────────────
+	title := habit.Name
+	if habit.Icon != "" {
+		title = habit.Icon + "  " + habit.Name
+	}
+	b.WriteString(styleLime.Bold(true).Render(title) + "\n")
+
+	// status badge
+	switch {
+	case h.CheckedToday && h.Streak > 0:
+		b.WriteString(styleOkBold.Render(fmt.Sprintf("✓ heute erledigt · 🔥 %d Tage Streak", h.Streak)) + "\n")
+	case h.CheckedToday:
+		b.WriteString(styleOk.Render("✓ heute erledigt") + "\n")
+	case h.Streak > 0:
+		b.WriteString(styleWarnBd.Render(fmt.Sprintf("! noch nicht · 🔥 %d Tage Streak in Gefahr", h.Streak)) + "\n")
+	default:
+		b.WriteString(styleMuted.Render("○ noch nicht erledigt heute") + "\n")
+	}
+
+	// ── description ────────────────────────────────────────────────────────────
+	if habit.Description != "" {
+		b.WriteString("\n")
+		innerW := m.width - 12
+		if innerW < 40 {
+			innerW = 60
+		}
+		for _, line := range strings.Split(wordWrap(habit.Description, innerW), "\n") {
+			b.WriteString(styleFg.Render(line) + "\n")
+		}
+	}
+
+	// ── today's note ──────────────────────────────────────────────────────────
+	if h.TodayNote != "" {
+		b.WriteString("\n" + styleMuted.Render("📝 Notiz heute") + "\n")
+		b.WriteString(styleFg.Render(h.TodayNote) + "\n")
+	}
+
+	// ── 7-day history ─────────────────────────────────────────────────────────
+	b.WriteString("\n" + styleMuted.Render("// letzte 7 Tage") + "\n")
+	today := truncateDay(time.Now())
+	dayAbbrDE := [7]string{"So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"}
+	b.WriteString("  ")
+	for i := 0; i < 7; i++ {
+		d := today.AddDate(0, 0, i-6)
+		abbr := dayAbbrDE[int(d.Weekday())]
+		if h.Last7Days[i] {
+			b.WriteString(styleOkBold.Render(abbr) + " ")
+		} else if i == 6 {
+			b.WriteString(styleWarn.Render(abbr) + " ")
+		} else {
+			b.WriteString(styleMuted.Render(abbr) + " ")
+		}
+	}
+	b.WriteString("\n  ")
+	for i := 0; i < 7; i++ {
+		if h.Last7Days[i] {
+			b.WriteString(styleOkBold.Render(" ✓ ") + " ")
+		} else {
+			b.WriteString(styleMuted.Render(" · ") + " ")
+		}
+	}
+	b.WriteString("\n")
+
+	// ── stats ─────────────────────────────────────────────────────────────────
+	b.WriteString("\n" + styleMuted.Render("// stats") + "\n")
+	numV := styleLime.Bold(true)
+	b.WriteString(fmt.Sprintf("  %s %s   %s %s",
+		numV.Render(fmt.Sprintf("%d", h.Streak)), styleMuted.Render("streak"),
+		numV.Render(fmt.Sprintf("%d", h.LongestStreak)), styleMuted.Render("longest"),
+	))
+	if h.TotalDays > 0 {
+		b.WriteString(fmt.Sprintf("   %s %s",
+			numV.Render(fmt.Sprintf("%d", h.TotalDays)), styleMuted.Render("Tage/30"),
+		))
+	}
+	b.WriteString("\n")
+
+	// ── chain ─────────────────────────────────────────────────────────────────
+	if h.ChainTo != "" {
+		b.WriteString("\n" + styleMuted.Render("// danach") + "\n")
+		b.WriteString("  " + styleMuted.Render("→ ") + styleFg.Render(h.ChainTo) + "\n")
+	}
+
+	// ── footer ────────────────────────────────────────────────────────────────
+	b.WriteString("\n")
+	footer := "space ✓ · N notiz · e bearbeiten · esc zurück"
+	if !h.CheckedToday {
+		footer = "space ✓ erledigt · e bearbeiten · esc zurück"
+	}
+	b.WriteString(styleMuted.Render(footer))
 	return panelStyle.Render(b.String())
 }
 
