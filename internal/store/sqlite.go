@@ -33,12 +33,10 @@ func Open(path string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("create data dir: %w", err)
 	}
-
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
 	}
-
 	s := &Store{db: db}
 	if err := s.init(); err != nil {
 		_ = db.Close()
@@ -53,17 +51,15 @@ func (s *Store) Close() error {
 }
 
 func (s *Store) init() error {
-	pragmas := []string{
+	for _, p := range []string{
 		"PRAGMA journal_mode=WAL;",
 		"PRAGMA foreign_keys=ON;",
 		"PRAGMA synchronous=NORMAL;",
-	}
-	for _, p := range pragmas {
+	} {
 		if _, err := s.db.Exec(p); err != nil {
-			return fmt.Errorf("pragma %q: %w", p, err)
+			return fmt.Errorf("pragma: %w", err)
 		}
 	}
-
 	_, err := s.db.Exec(`
 		CREATE TABLE IF NOT EXISTS habits (
 			id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -71,7 +67,6 @@ func (s *Store) init() error {
 			description TEXT NOT NULL DEFAULT '',
 			created_at  TEXT NOT NULL
 		);
-
 		CREATE TABLE IF NOT EXISTS checkins (
 			id         INTEGER PRIMARY KEY AUTOINCREMENT,
 			habit_id   INTEGER NOT NULL REFERENCES habits(id) ON DELETE CASCADE,
@@ -79,27 +74,61 @@ func (s *Store) init() error {
 			created_at TEXT NOT NULL,
 			UNIQUE(habit_id, date)
 		);
+		CREATE TABLE IF NOT EXISTS schema_migrations (
+			version    INTEGER PRIMARY KEY,
+			applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+		);
 	`)
-	return err
+	if err != nil {
+		return err
+	}
+	return s.runMigrations()
 }
 
-// AddHabit inserts a new habit. Returns an error if the name already exists.
-func (s *Store) AddHabit(name, description string) (models.Habit, error) {
+func (s *Store) runMigrations() error {
+	type migration struct {
+		version int
+		sql     string
+	}
+	migrations := []migration{
+		{1, `ALTER TABLE habits ADD COLUMN icon TEXT NOT NULL DEFAULT ''`},
+		{2, `CREATE TABLE IF NOT EXISTS groups (
+			id         INTEGER PRIMARY KEY AUTOINCREMENT,
+			name       TEXT NOT NULL UNIQUE,
+			icon       TEXT NOT NULL DEFAULT '',
+			sort_order INTEGER NOT NULL DEFAULT 0,
+			created_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`},
+		{3, `ALTER TABLE habits ADD COLUMN group_id INTEGER REFERENCES groups(id) ON DELETE SET NULL`},
+	}
+	for _, m := range migrations {
+		var n int
+		s.db.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE version = ?`, m.version).Scan(&n)
+		if n > 0 {
+			continue
+		}
+		if _, err := s.db.Exec(m.sql); err != nil {
+			return fmt.Errorf("migration %d: %w", m.version, err)
+		}
+		s.db.Exec(`INSERT INTO schema_migrations (version) VALUES (?)`, m.version)
+	}
+	return nil
+}
+
+// ── habits ───────────────────────────────────────────────────────────────────
+
+// AddHabit inserts a new habit.
+func (s *Store) AddHabit(name, description, icon string) (models.Habit, error) {
 	now := time.Now()
 	res, err := s.db.Exec(
-		`INSERT INTO habits (name, description, created_at) VALUES (?, ?, ?)`,
-		name, description, now.Format(tsLayout),
+		`INSERT INTO habits (name, description, icon, created_at) VALUES (?, ?, ?, ?)`,
+		name, description, icon, now.Format(tsLayout),
 	)
 	if err != nil {
 		return models.Habit{}, fmt.Errorf("add habit: %w", err)
 	}
 	id, _ := res.LastInsertId()
-	return models.Habit{
-		ID:          id,
-		Name:        name,
-		Description: description,
-		CreatedAt:   now,
-	}, nil
+	return models.Habit{ID: id, Name: name, Description: description, Icon: icon, CreatedAt: now}, nil
 }
 
 // DeleteHabit removes a habit and all its check-ins by name.
@@ -115,19 +144,42 @@ func (s *Store) DeleteHabit(name string) error {
 	return nil
 }
 
-// ListHabits returns all habits ordered by creation time.
+// UpdateHabit updates the name, icon, and description of a habit.
+func (s *Store) UpdateHabit(oldName, newName, icon, description string) error {
+	_, err := s.db.Exec(
+		`UPDATE habits SET name = ?, icon = ?, description = ? WHERE name = ?`,
+		newName, icon, description, oldName,
+	)
+	return err
+}
+
+// SetHabitGroup assigns a habit to a group (groupID=0 to ungroup).
+func (s *Store) SetHabitGroup(habitName string, groupID int64) error {
+	var v interface{} = groupID
+	if groupID == 0 {
+		v = nil
+	}
+	_, err := s.db.Exec(`UPDATE habits SET group_id = ? WHERE name = ?`, v, habitName)
+	return err
+}
+
+// ListHabits returns all habits ordered by group sort_order then creation time.
 func (s *Store) ListHabits() ([]models.Habit, error) {
-	rows, err := s.db.Query(`SELECT id, name, description, created_at FROM habits ORDER BY created_at ASC`)
+	rows, err := s.db.Query(`
+		SELECT h.id, h.name, h.description, h.icon, COALESCE(h.group_id, 0), h.created_at
+		FROM habits h
+		LEFT JOIN groups g ON h.group_id = g.id
+		ORDER BY COALESCE(g.sort_order, 999999), h.created_at ASC
+	`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-
 	var habits []models.Habit
 	for rows.Next() {
 		var h models.Habit
 		var createdStr string
-		if err := rows.Scan(&h.ID, &h.Name, &h.Description, &createdStr); err != nil {
+		if err := rows.Scan(&h.ID, &h.Name, &h.Description, &h.Icon, &h.GroupID, &createdStr); err != nil {
 			return nil, err
 		}
 		h.CreatedAt, _ = time.Parse(tsLayout, createdStr)
@@ -136,50 +188,46 @@ func (s *Store) ListHabits() ([]models.Habit, error) {
 	return habits, rows.Err()
 }
 
+// ── check-ins ────────────────────────────────────────────────────────────────
+
 // CheckIn records a check-in for the named habit on the given date.
-// Uses INSERT OR IGNORE so repeated check-ins on the same day are silently ignored.
 func (s *Store) CheckIn(name string, date time.Time) error {
-	// Resolve habit ID by name.
 	var habitID int64
 	err := s.db.QueryRow(`SELECT id FROM habits WHERE name = ?`, name).Scan(&habitID)
 	if err != nil {
 		return fmt.Errorf("habit %q not found", name)
 	}
-
 	dateStr := date.Format(dateLayout)
 	now := time.Now()
 	_, err = s.db.Exec(
 		`INSERT OR IGNORE INTO checkins (habit_id, date, created_at) VALUES (?, ?, ?)`,
 		habitID, dateStr, now.Format(tsLayout),
 	)
-	if err != nil {
-		return fmt.Errorf("check-in: %w", err)
-	}
-	return nil
+	return err
 }
+
+// ── stats ────────────────────────────────────────────────────────────────────
 
 // GetStats returns statistics for a named habit over the last `days` days.
 func (s *Store) GetStats(name string, days int) (models.HabitStats, error) {
 	var h models.Habit
 	var createdStr string
 	err := s.db.QueryRow(
-		`SELECT id, name, description, created_at FROM habits WHERE name = ?`, name,
-	).Scan(&h.ID, &h.Name, &h.Description, &createdStr)
+		`SELECT id, name, description, icon, COALESCE(group_id,0), created_at FROM habits WHERE name = ?`, name,
+	).Scan(&h.ID, &h.Name, &h.Description, &h.Icon, &h.GroupID, &createdStr)
 	if err != nil {
 		return models.HabitStats{}, fmt.Errorf("habit %q not found", name)
 	}
 	h.CreatedAt, _ = time.Parse(tsLayout, createdStr)
-
 	return s.computeStats(h, days)
 }
 
-// GetAllStats returns statistics for every habit over the last `days` days.
+// GetAllStats returns statistics for every habit, sorted by group then creation time.
 func (s *Store) GetAllStats(days int) ([]models.HabitStats, error) {
 	habits, err := s.ListHabits()
 	if err != nil {
 		return nil, err
 	}
-
 	stats := make([]models.HabitStats, 0, len(habits))
 	for _, h := range habits {
 		st, err := s.computeStats(h, days)
@@ -191,9 +239,7 @@ func (s *Store) GetAllStats(days int) ([]models.HabitStats, error) {
 	return stats, nil
 }
 
-// computeStats calculates HabitStats for a habit.
 func (s *Store) computeStats(h models.Habit, days int) (models.HabitStats, error) {
-	// Fetch all check-in dates for this habit, ordered newest first.
 	rows, err := s.db.Query(
 		`SELECT date FROM checkins WHERE habit_id = ? ORDER BY date DESC`, h.ID,
 	)
@@ -202,7 +248,6 @@ func (s *Store) computeStats(h models.Habit, days int) (models.HabitStats, error
 	}
 	defer rows.Close()
 
-	// Collect all check-in dates as a set (YYYY-MM-DD strings).
 	dateSet := make(map[string]bool)
 	var dates []string
 	for rows.Next() {
@@ -222,17 +267,14 @@ func (s *Store) computeStats(h models.Habit, days int) (models.HabitStats, error
 	today := truncateToDay(time.Now())
 	todayStr := today.Format(dateLayout)
 
-	// Current streak: consecutive days ending today.
 	streak := 0
 	for i := 0; ; i++ {
-		day := today.AddDate(0, 0, -i)
-		if !dateSet[day.Format(dateLayout)] {
+		if !dateSet[today.AddDate(0, 0, -i).Format(dateLayout)] {
 			break
 		}
 		streak++
 	}
 
-	// Longest streak: scan all dates.
 	longestStreak := 0
 	if len(dates) > 0 {
 		cur := 1
@@ -255,22 +297,18 @@ func (s *Store) computeStats(h models.Habit, days int) (models.HabitStats, error
 			longestStreak = 1
 		}
 	}
-	// streak can be longer than longestStreak if all dates are from current streak
 	if streak > longestStreak {
 		longestStreak = streak
 	}
 
-	// Total days with a check-in in the last `days` days.
 	windowStart := today.AddDate(0, 0, -(days - 1))
 	totalDays := 0
 	for i := 0; i < days; i++ {
-		day := windowStart.AddDate(0, 0, i)
-		if dateSet[day.Format(dateLayout)] {
+		if dateSet[windowStart.AddDate(0, 0, i).Format(dateLayout)] {
 			totalDays++
 		}
 	}
 
-	// Last check-in.
 	var lastCheckIn *time.Time
 	if len(dates) > 0 {
 		t, err := time.ParseInLocation(dateLayout, dates[0], time.Local)
@@ -279,7 +317,11 @@ func (s *Store) computeStats(h models.Habit, days int) (models.HabitStats, error
 		}
 	}
 
-	checkedToday := dateSet[todayStr]
+	var last7 [7]bool
+	for i := 0; i < 7; i++ {
+		d := today.AddDate(0, 0, i-6)
+		last7[i] = dateSet[d.Format(dateLayout)]
+	}
 
 	return models.HabitStats{
 		Habit:         h,
@@ -287,11 +329,98 @@ func (s *Store) computeStats(h models.Habit, days int) (models.HabitStats, error
 		LongestStreak: longestStreak,
 		TotalDays:     totalDays,
 		LastCheckIn:   lastCheckIn,
-		CheckedToday:  checkedToday,
+		CheckedToday:  dateSet[todayStr],
+		Last7Days:     last7,
 	}, nil
 }
 
-// truncateToDay returns midnight local time for the given time.
+// ── calendar heatmap ─────────────────────────────────────────────────────────
+
+// CalendarData holds aggregated daily completion counts for stats views.
+type CalendarData struct {
+	ByDate      map[string]int
+	TotalHabits int
+}
+
+// GetCalendarData returns per-day completion counts for the past `weeks` weeks.
+func (s *Store) GetCalendarData(weeks int) (CalendarData, error) {
+	var total int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM habits`).Scan(&total); err != nil {
+		return CalendarData{}, err
+	}
+	if total == 0 {
+		return CalendarData{ByDate: map[string]int{}, TotalHabits: 0}, nil
+	}
+	since := truncateToDay(time.Now()).AddDate(0, 0, -weeks*7)
+	rows, err := s.db.Query(`
+		SELECT date, COUNT(DISTINCT habit_id)
+		FROM checkins WHERE date >= ?
+		GROUP BY date
+	`, since.Format(dateLayout))
+	if err != nil {
+		return CalendarData{}, err
+	}
+	defer rows.Close()
+	byDate := make(map[string]int)
+	for rows.Next() {
+		var d string
+		var cnt int
+		if err := rows.Scan(&d, &cnt); err != nil {
+			return CalendarData{}, err
+		}
+		byDate[d] = cnt
+	}
+	return CalendarData{ByDate: byDate, TotalHabits: total}, rows.Err()
+}
+
+// ── groups ───────────────────────────────────────────────────────────────────
+
+// AddGroup creates a new group.
+func (s *Store) AddGroup(name, icon string) (models.Group, error) {
+	var maxOrder int
+	s.db.QueryRow(`SELECT COALESCE(MAX(sort_order),0) FROM groups`).Scan(&maxOrder)
+	now := time.Now()
+	res, err := s.db.Exec(
+		`INSERT INTO groups (name, icon, sort_order, created_at) VALUES (?, ?, ?, ?)`,
+		name, icon, maxOrder+1, now.Format(tsLayout),
+	)
+	if err != nil {
+		return models.Group{}, fmt.Errorf("add group: %w", err)
+	}
+	id, _ := res.LastInsertId()
+	return models.Group{ID: id, Name: name, Icon: icon, SortOrder: maxOrder + 1, CreatedAt: now}, nil
+}
+
+// ListGroups returns all groups ordered by sort_order.
+func (s *Store) ListGroups() ([]models.Group, error) {
+	rows, err := s.db.Query(
+		`SELECT id, name, icon, sort_order, created_at FROM groups ORDER BY sort_order ASC`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var gs []models.Group
+	for rows.Next() {
+		var g models.Group
+		var ts string
+		if err := rows.Scan(&g.ID, &g.Name, &g.Icon, &g.SortOrder, &ts); err != nil {
+			return nil, err
+		}
+		g.CreatedAt, _ = time.Parse(tsLayout, ts)
+		gs = append(gs, g)
+	}
+	return gs, rows.Err()
+}
+
+// DeleteGroup removes a group (habits in it become ungrouped).
+func (s *Store) DeleteGroup(id int64) error {
+	_, err := s.db.Exec(`DELETE FROM groups WHERE id = ?`, id)
+	return err
+}
+
+// ── util ─────────────────────────────────────────────────────────────────────
+
 func truncateToDay(t time.Time) time.Time {
 	y, m, d := t.Date()
 	return time.Date(y, m, d, 0, 0, 0, 0, t.Location())

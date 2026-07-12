@@ -222,7 +222,7 @@ func handleAddHabit(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolRe
 	}
 	defer st.Close()
 
-	if _, err := st.AddHabit(name, desc); err != nil {
+	if _, err := st.AddHabit(name, desc, ""); err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 

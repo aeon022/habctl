@@ -1,22 +1,26 @@
 package ai
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
 )
 
-const systemPromptSuggest = `Du bist ein Habit-Coach, der Menschen hilft, bessere Gewohnheiten aufzubauen.
+const systemPromptSuggest = `Du bist ein Habit-Coach. Antworte auf Deutsch.
 
-Antworte auf Deutsch. Sei konkret und direkt. Keine langen Einleitungen.
+Gib die Habit-Vorschläge in EXAKT diesem Format aus — kein Text davor, kein Text danach.
+Jeder Habit-Block beginnt und endet mit der Zeile "###".
 
-Beim Vorschlagen von Habits:
-- Konkret und umsetzbar (nicht "mehr Sport" sondern "20 Min Laufen")
-- Gib den Zeitaufwand an (z.B. "2 Min", "20 Min", "täglich")
-- Erkläre kurz WARUM der Habit wertvoll ist (1 Satz)
-- Mix aus schnellen Wins (2-5 Min) und bedeutsamen Habits
-- Vermeide Überschneidungen mit bestehenden Habits
-- Format: **Habit-Name** (Zeit) — Warum es wichtig ist`
+###
+Name: [Emoji] [Habit-Name]
+Zeit: [X Min/Tag]
+Nutzen: [1-2 Sätze konkreter Nutzen]
+Tipp: [ein praktischer Einstiegstipp]
+###
+
+Die App parst dieses Format maschinell. Abweichungen brechen das Parsing.
+Regeln: Emoji direkt vor dem Namen · Zeitaufwand realistisch · keine Überschneidungen mit bestehenden Habits`
 
 // ErrNoAPIKey is returned when no provider key is configured.
 var ErrNoAPIKey = fmt.Errorf("kein API-Key gefunden — setze ANTHROPIC_API_KEY, OPENAI_API_KEY oder GEMINI_API_KEY")
@@ -30,14 +34,14 @@ type SuggestRequest struct {
 }
 
 // Suggest streams habit suggestions from the auto-detected provider.
+// ctx can be cancelled to abort the inflight HTTP request immediately.
 // Each text chunk is passed to out as it arrives.
-// Returns the full response and the provider used.
-func Suggest(req SuggestRequest, out func(chunk string)) (string, error) {
+func Suggest(ctx context.Context, req SuggestRequest, out func(chunk string)) (string, error) {
 	info, err := Detect()
 	if err != nil {
 		return "", err
 	}
-	return Call(info, systemPromptSuggest, buildPrompt(req), out)
+	return Call(ctx, info, systemPromptSuggest, buildPrompt(req), out)
 }
 
 // SuggestBlocking is like Suggest but returns the full result without streaming.
@@ -46,7 +50,7 @@ func SuggestBlocking(req SuggestRequest) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return Call(info, systemPromptSuggest, buildPrompt(req), nil)
+	return Call(context.Background(), info, systemPromptSuggest, buildPrompt(req), nil)
 }
 
 // SuggestOllama streams suggestions from a local Ollama instance, bypassing
@@ -57,7 +61,7 @@ func SuggestOllama(req SuggestRequest, out func(string)) (string, error) {
 		model = "llama3.2"
 	}
 	info := ProviderInfo{ProviderOllama, model, "Ollama (" + model + ", local)"}
-	return Call(info, systemPromptSuggest, buildPrompt(req), out)
+	return Call(context.Background(), info, systemPromptSuggest, buildPrompt(req), out)
 }
 
 // SuggestWithProvider runs against a specific provider (for the --provider flag).
@@ -67,13 +71,12 @@ func SuggestWithProvider(req SuggestRequest, p Provider, out func(string)) (stri
 		return "", err
 	}
 	if p != "" {
-		// Re-detect but constrain to requested provider.
 		info, err = detectForced(p)
 		if err != nil {
 			return "", err
 		}
 	}
-	return Call(info, systemPromptSuggest, buildPrompt(req), out)
+	return Call(context.Background(), info, systemPromptSuggest, buildPrompt(req), out)
 }
 
 func detectForced(p Provider) (ProviderInfo, error) {
@@ -85,7 +88,7 @@ func detectForced(p Provider) (ProviderInfo, error) {
 	case ProviderGemini:
 		model := os.Getenv("GEMINI_MODEL")
 		if model == "" {
-			model = "gemini-1.5-flash"
+			model = "gemini-flash-latest"
 		}
 		return ProviderInfo{ProviderGemini, model, "Gemini " + model + " (Google)"}, nil
 	case ProviderOllama:
@@ -97,49 +100,38 @@ func detectForced(p Provider) (ProviderInfo, error) {
 
 func buildPrompt(req SuggestRequest) string {
 	if req.Count == 0 {
-		req.Count = 6
+		req.Count = 3
 	}
 
 	var b strings.Builder
 
 	if len(req.ExistingHabits) > 0 {
-		b.WriteString("Meine aktuellen Habits:\n")
+		b.WriteString("Meine bestehenden Habits (keine Überschneidungen):\n")
 		for _, h := range req.ExistingHabits {
 			b.WriteString("- " + h + "\n")
 		}
 		b.WriteString("\n")
 	}
 
+	b.WriteString(fmt.Sprintf("Schlage mir genau %d Habits vor", req.Count))
 	switch req.Routine {
 	case "morning":
-		b.WriteString(fmt.Sprintf(
-			"Schlage mir %d Habits für eine starke Morgenroutine vor. "+
-				"Fokus: Energie, Klarheit, guter Start in den Tag. "+
-				"Zeitfenster: 5–60 Minuten gesamt.\n", req.Count))
+		b.WriteString(" für eine Morgenroutine (Energie, Klarheit, guter Start)")
 	case "evening":
-		b.WriteString(fmt.Sprintf(
-			"Schlage mir %d Habits für eine Abendroutine vor. "+
-				"Fokus: Runterfahren, Vorbereitung auf den nächsten Tag, guter Schlaf.\n", req.Count))
+		b.WriteString(" für eine Abendroutine (Runterfahren, guter Schlaf)")
 	case "health":
-		b.WriteString(fmt.Sprintf(
-			"Schlage mir %d Habits rund um Gesundheit vor. "+
-				"Mix aus Bewegung, Ernährung, Schlaf, mentaler Gesundheit.\n", req.Count))
+		b.WriteString(" für Gesundheit (Bewegung, Ernährung, Schlaf, Mental Health)")
 	case "learning":
-		b.WriteString(fmt.Sprintf(
-			"Schlage mir %d Habits zum Lernen und persönlicher Entwicklung vor. "+
-				"Lesen, Schreiben, Sprachen, neue Skills.\n", req.Count))
+		b.WriteString(" zum Lernen (Lesen, Schreiben, Sprachen, neue Skills)")
 	case "productivity":
-		b.WriteString(fmt.Sprintf(
-			"Schlage mir %d Produktivitäts-Habits vor. "+
-				"Fokus, Deep Work, System-Gewohnheiten für Entwickler/Wissensarbeiter.\n", req.Count))
+		b.WriteString(" für Produktivität (Fokus, Deep Work, Wissensarbeiter)")
 	default:
-		b.WriteString(fmt.Sprintf(
-			"Schlage mir %d Habits vor — einen guten Mix aus verschiedenen Lebensbereichen "+
-				"(Gesundheit, Lernen, Produktivität, Mindfulness).\n", req.Count))
+		b.WriteString(" — Mix aus Gesundheit, Lernen, Produktivität, Mindfulness")
 	}
+	b.WriteString(".\n")
 
 	if req.Goal != "" {
-		b.WriteString(fmt.Sprintf("\nMein Ziel: %s\n", req.Goal))
+		b.WriteString(fmt.Sprintf("Mein Ziel: %s\n", req.Goal))
 	}
 
 	return b.String()

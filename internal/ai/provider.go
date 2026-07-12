@@ -3,7 +3,7 @@
 // Provider auto-detection (first key found wins):
 //   ANTHROPIC_API_KEY  → Claude Haiku
 //   OPENAI_API_KEY     → GPT-4o mini
-//   GEMINI_API_KEY     → Gemini 2.0 Flash (via OpenAI-compatible endpoint)
+//   GEMINI_API_KEY or GOOGLE_REFRESH_TOKEN → Gemini 2.0 Flash (via OpenAI-compatible endpoint)
 //   OLLAMA_HOST or default localhost → Ollama (free, local)
 //
 // Override with HABCTL_PROVIDER=anthropic|openai|gemini|ollama
@@ -23,6 +23,17 @@ import (
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
 )
+
+// Call dispatches to the correct provider backend.
+// ctx is used to cancel inflight requests; pass context.Background() for fire-and-forget callers.
+func Call(ctx context.Context, info ProviderInfo, system, prompt string, out func(string)) (string, error) {
+	switch info.Name {
+	case ProviderAnthropic:
+		return callAnthropic(ctx, info, system, prompt, out)
+	default:
+		return callOpenAICompat(ctx, info, system, prompt, out)
+	}
+}
 
 // Provider identifies which LLM backend to use.
 type Provider string
@@ -56,10 +67,10 @@ func Detect() (ProviderInfo, error) {
 	if check(ProviderOpenAI) && os.Getenv("OPENAI_API_KEY") != "" {
 		return ProviderInfo{ProviderOpenAI, "gpt-4o-mini", "GPT-4o mini (OpenAI)"}, nil
 	}
-	if check(ProviderGemini) && os.Getenv("GEMINI_API_KEY") != "" {
+	if check(ProviderGemini) && (os.Getenv("GEMINI_API_KEY") != "" || os.Getenv("GOOGLE_REFRESH_TOKEN") != "") {
 		model := os.Getenv("GEMINI_MODEL")
 		if model == "" {
-			model = "gemini-1.5-flash"
+			model = "gemini-flash-latest"
 		}
 		return ProviderInfo{ProviderGemini, model, "Gemini " + model + " (Google)"}, nil
 	}
@@ -80,13 +91,13 @@ func Detect() (ProviderInfo, error) {
 }
 
 // callAnthropic runs a blocking Anthropic call and streams chunks to out.
-func callAnthropic(info ProviderInfo, system, prompt string, out func(string)) (string, error) {
+func callAnthropic(ctx context.Context, info ProviderInfo, system, prompt string, out func(string)) (string, error) {
 	key := os.Getenv("ANTHROPIC_API_KEY")
 	c := anthropic.NewClient(anthropicopt.WithAPIKey(key))
 
-	stream := c.Messages.NewStreaming(context.Background(), anthropic.MessageNewParams{
+	stream := c.Messages.NewStreaming(ctx, anthropic.MessageNewParams{
 		Model:     anthropic.Model(info.Model),
-		MaxTokens: 1024,
+		MaxTokens: 8192,
 		System:    []anthropic.TextBlockParam{{Text: system}},
 		Messages:  []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock(prompt))},
 	})
@@ -112,7 +123,7 @@ func callAnthropic(info ProviderInfo, system, prompt string, out func(string)) (
 
 // callOpenAICompat runs a blocking OpenAI-compatible call and streams chunks to out.
 // Works for OpenAI, Gemini (via compat endpoint), Ollama, Groq, etc.
-func callOpenAICompat(info ProviderInfo, system, prompt string, out func(string)) (string, error) {
+func callOpenAICompat(ctx context.Context, info ProviderInfo, system, prompt string, out func(string)) (string, error) {
 	var opts []option.RequestOption
 
 	switch info.Name {
@@ -123,6 +134,7 @@ func callOpenAICompat(info ProviderInfo, system, prompt string, out func(string)
 		opts = append(opts,
 			option.WithAPIKey(apiKey),
 			option.WithBaseURL("https://generativelanguage.googleapis.com/v1beta/openai/"),
+			option.WithMaxRetries(0), // Gemini free tier: no automatic retries — each retry burns quota
 		)
 	case ProviderOllama:
 		host := os.Getenv("OLLAMA_HOST")
@@ -137,14 +149,14 @@ func callOpenAICompat(info ProviderInfo, system, prompt string, out func(string)
 
 	client := openai.NewClient(opts...)
 
-	stream := client.Chat.Completions.NewStreaming(context.Background(),
+	stream := client.Chat.Completions.NewStreaming(ctx,
 		openai.ChatCompletionNewParams{
 			Model: info.Model,
 			Messages: []openai.ChatCompletionMessageParamUnion{
 				openai.SystemMessage(system),
 				openai.UserMessage(prompt),
 			},
-			MaxTokens: openai.Int(1024),
+			MaxTokens: openai.Int(8192),
 		},
 	)
 
@@ -204,10 +216,10 @@ func friendlyNetErr(err error) error {
 		return fmt.Errorf("Timeout — API-Server antwortet nicht")
 	case strings.Contains(msg, "429") || strings.Contains(msg, "Too Many Requests") ||
 		strings.Contains(msg, "RESOURCE_EXHAUSTED") || strings.Contains(msg, "rate limit") ||
-		strings.Contains(msg, "quota"):
+		strings.Contains(msg, "quota") || strings.Contains(msg, "Quota"):
 		return friendlyForStatus(429, err)
 	case strings.Contains(msg, "404"):
-		return fmt.Errorf("404 — API-Endpunkt nicht gefunden. Gemini: Key von aistudio.google.com holen (Google-Login → 'Get API key')")
+		return fmt.Errorf("404 — Modell nicht gefunden. GEMINI_MODEL=gemini-2.0-flash setzen oder anderen Modellnamen probieren")
 	case strings.Contains(msg, "401") || strings.Contains(msg, "Unauthorized"):
 		return fmt.Errorf("API-Key ungültig — Settings (S) öffnen und Key prüfen")
 	case strings.Contains(msg, "403") || strings.Contains(msg, "Forbidden"):
@@ -237,10 +249,18 @@ func httpStatusCode(err error) (int, bool) {
 func friendlyForStatus(code int, orig error) error {
 	switch code {
 	case 429:
-		return fmt.Errorf("429 Rate Limit / Quota — Gemini Free Tier: kurz warten oder Modell wechseln. " +
-			"Quota prüfen: aistudio.google.com/u/0/quota")
+		raw := orig.Error()
+		if strings.Contains(raw, "PerDay") || strings.Contains(raw, "perDay") ||
+			strings.Contains(raw, "daily") || strings.Contains(raw, "Daily") {
+			return fmt.Errorf("429 Tageslimit erschöpft (1500 Req/Tag Free Tier). " +
+				"Reset: täglich 00:00 Uhr PST = 09:00 Uhr CET. " +
+				"Fix: neues Google-Projekt anlegen (gibt frische Quota) " +
+				"oder S → anderen Provider (Anthropic/OpenAI) wählen.")
+		}
+		return fmt.Errorf("429 Minutenlimit (15 Req/Min Free Tier) — 60 Sek warten. " +
+			"Neuer Key im gleichen Projekt hilft nicht: Quota gilt pro Projekt.")
 	case 404:
-		return fmt.Errorf("404 — API-Endpunkt nicht gefunden. Gemini: Key von aistudio.google.com holen")
+		return fmt.Errorf("404 — Modell nicht verfügbar. GEMINI_MODEL=gemini-flash-latest setzen oder anderen Modellnamen probieren")
 	case 401:
 		return fmt.Errorf("401 — API-Key ungültig. Settings (S) öffnen und Key neu eingeben")
 	case 403:
@@ -249,12 +269,3 @@ func friendlyForStatus(code int, orig error) error {
 	return orig
 }
 
-// Call dispatches to the correct provider backend.
-func Call(info ProviderInfo, system, prompt string, out func(string)) (string, error) {
-	switch info.Name {
-	case ProviderAnthropic:
-		return callAnthropic(info, system, prompt, out)
-	default:
-		return callOpenAICompat(info, system, prompt, out)
-	}
-}

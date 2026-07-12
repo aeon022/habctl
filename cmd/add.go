@@ -22,7 +22,7 @@ var addCmd = &cobra.Command{
 		}
 		defer s.Close()
 
-		habit, err := s.AddHabit(name, addDesc)
+		habit, err := s.AddHabit(name, addDesc, "")
 		if err != nil {
 			return err
 		}
