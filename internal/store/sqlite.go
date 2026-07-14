@@ -617,7 +617,7 @@ func (s *Store) AddChain(fromName, toName string) error {
 		return fmt.Errorf("habit %q not found", toName)
 	}
 	if fromID == toID {
-		return fmt.Errorf("ein Habit kann nicht auf sich selbst zeigen")
+		return fmt.Errorf("a habit cannot point to itself")
 	}
 	_, err := s.db.Exec(`INSERT OR IGNORE INTO habit_chains (from_id, to_id) VALUES (?, ?)`, fromID, toID)
 	return err
@@ -741,7 +741,7 @@ func (s *Store) GetWeeklyReview() (models.WeeklyReview, error) {
 			wd := int(today.AddDate(0, 0, -i).Weekday())
 			dowTotal[wd] += len(habits)
 		}
-		weekdayDE := [7]string{"Sonntag", "Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag"}
+		weekdayEN := [7]string{"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"}
 		weakestPct, strongestPct := 2.0, -1.0
 		weakestIdx, strongestIdx := -1, -1
 		for i := 0; i < 7; i++ {
@@ -759,10 +759,10 @@ func (s *Store) GetWeeklyReview() (models.WeeklyReview, error) {
 			}
 		}
 		if weakestIdx >= 0 {
-			weakestDay = fmt.Sprintf("%s (%.0f%%)", weekdayDE[weakestIdx], weakestPct*100)
+			weakestDay = fmt.Sprintf("%s (%.0f%%)", weekdayEN[weakestIdx], weakestPct*100)
 		}
 		if strongestIdx >= 0 && strongestIdx != weakestIdx {
-			strongestDay = fmt.Sprintf("%s (%.0f%%)", weekdayDE[strongestIdx], strongestPct*100)
+			strongestDay = fmt.Sprintf("%s (%.0f%%)", weekdayEN[strongestIdx], strongestPct*100)
 		}
 	}
 

@@ -83,10 +83,10 @@ func Detect() (ProviderInfo, error) {
 	}
 
 	if override != "" {
-		return ProviderInfo{}, fmt.Errorf("HABCTL_PROVIDER=%q gesetzt, aber kein passender API-Key gefunden", override)
+		return ProviderInfo{}, fmt.Errorf("HABCTL_PROVIDER=%q set but no matching API key found", override)
 	}
 	return ProviderInfo{}, fmt.Errorf(
-		"kein API-Key gefunden — setze ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, oder nutze Ollama lokal",
+		"no API key found — set ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, or use Ollama locally",
 	)
 }
 
@@ -209,21 +209,21 @@ func friendlyNetErr(err error) error {
 	msg := err.Error()
 	switch {
 	case strings.Contains(msg, "lookup") || strings.Contains(msg, "no such host"):
-		return fmt.Errorf("DNS-Fehler — Domain nicht erreichbar. VPN/Proxy/Firewall prüfen oder Ollama (lokal) nutzen")
+		return fmt.Errorf("DNS error — domain unreachable. Check VPN/proxy/firewall or use Ollama (local)")
 	case strings.Contains(msg, "connection refused"):
-		return fmt.Errorf("Verbindung abgelehnt — API-Server nicht erreichbar")
+		return fmt.Errorf("connection refused — API server not reachable")
 	case strings.Contains(msg, "timeout") || strings.Contains(msg, "deadline exceeded"):
-		return fmt.Errorf("Timeout — API-Server antwortet nicht")
+		return fmt.Errorf("timeout — API server not responding")
 	case strings.Contains(msg, "429") || strings.Contains(msg, "Too Many Requests") ||
 		strings.Contains(msg, "RESOURCE_EXHAUSTED") || strings.Contains(msg, "rate limit") ||
 		strings.Contains(msg, "quota") || strings.Contains(msg, "Quota"):
 		return friendlyForStatus(429, err)
 	case strings.Contains(msg, "404"):
-		return fmt.Errorf("404 — Modell nicht gefunden. GEMINI_MODEL=gemini-2.0-flash setzen oder anderen Modellnamen probieren")
+		return fmt.Errorf("404 — model not found. Set GEMINI_MODEL=gemini-2.0-flash or try a different model name")
 	case strings.Contains(msg, "401") || strings.Contains(msg, "Unauthorized"):
-		return fmt.Errorf("API-Key ungültig — Settings (S) öffnen und Key prüfen")
+		return fmt.Errorf("API key invalid — open Settings (S) and check the key")
 	case strings.Contains(msg, "403") || strings.Contains(msg, "Forbidden"):
-		return fmt.Errorf("Zugriff verweigert — API-Key hat keine Berechtigung")
+		return fmt.Errorf("access denied — API key has no permission for this resource")
 	}
 	return err
 }
@@ -252,19 +252,19 @@ func friendlyForStatus(code int, orig error) error {
 		raw := orig.Error()
 		if strings.Contains(raw, "PerDay") || strings.Contains(raw, "perDay") ||
 			strings.Contains(raw, "daily") || strings.Contains(raw, "Daily") {
-			return fmt.Errorf("429 Tageslimit erschöpft (1500 Req/Tag Free Tier). " +
-				"Reset: täglich 00:00 Uhr PST = 09:00 Uhr CET. " +
-				"Fix: neues Google-Projekt anlegen (gibt frische Quota) " +
-				"oder S → anderen Provider (Anthropic/OpenAI) wählen.")
+			return fmt.Errorf("429 daily limit exhausted (1500 req/day free tier). " +
+				"Reset: daily at 00:00 PST. " +
+				"Fix: create a new Google project (fresh quota) " +
+				"or S → switch provider (Anthropic/OpenAI).")
 		}
-		return fmt.Errorf("429 Minutenlimit (15 Req/Min Free Tier) — 60 Sek warten. " +
-			"Neuer Key im gleichen Projekt hilft nicht: Quota gilt pro Projekt.")
+		return fmt.Errorf("429 per-minute limit (15 req/min free tier) — wait 60 s. " +
+			"A new key in the same project won't help: quota is per project.")
 	case 404:
-		return fmt.Errorf("404 — Modell nicht verfügbar. GEMINI_MODEL=gemini-flash-latest setzen oder anderen Modellnamen probieren")
+		return fmt.Errorf("404 — model not available. Set GEMINI_MODEL=gemini-flash-latest or try a different model name")
 	case 401:
-		return fmt.Errorf("401 — API-Key ungültig. Settings (S) öffnen und Key neu eingeben")
+		return fmt.Errorf("401 — API key invalid. Open Settings (S) and re-enter the key")
 	case 403:
-		return fmt.Errorf("403 — Zugriff verweigert. API-Key hat keine Berechtigung für dieses Modell")
+		return fmt.Errorf("403 — access denied. API key has no permission for this model")
 	}
 	return orig
 }

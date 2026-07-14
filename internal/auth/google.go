@@ -35,7 +35,7 @@ func geminiConfig(clientID, clientSecret string) *oauth2.Config {
 func BrowserLogin(clientID, clientSecret string) (refreshToken string, err error) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		return "", fmt.Errorf("lokalen Port nicht belegen: %w", err)
+		return "", fmt.Errorf("could not bind local port: %w", err)
 	}
 	port := ln.Addr().(*net.TCPAddr).Port
 	redirectURL := fmt.Sprintf("http://localhost:%d/callback", port)
@@ -69,13 +69,13 @@ func BrowserLogin(clientID, clientSecret string) (refreshToken string, err error
 		code := r.URL.Query().Get("code")
 		if code == "" {
 			http.Error(w, "no code", http.StatusBadRequest)
-			errCh <- fmt.Errorf("kein Auth-Code empfangen")
+			errCh <- fmt.Errorf("no auth code received")
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		fmt.Fprint(w, `<!DOCTYPE html><html><body style="font-family:sans-serif;padding:2rem;max-width:400px">
-<h2 style="color:#16a34a">✓ habctl: Login erfolgreich</h2>
-<p>Du kannst diesen Tab schließen und zu habctl zurückkehren.</p>
+<h2 style="color:#16a34a">✓ habctl: Login successful</h2>
+<p>You can close this tab and return to habctl.</p>
 </body></html>`)
 		codeCh <- code
 	})
@@ -94,17 +94,17 @@ func BrowserLogin(clientID, clientSecret string) (refreshToken string, err error
 	case e := <-errCh:
 		return "", e
 	case <-ctx.Done():
-		return "", fmt.Errorf("Login-Timeout (5 Minuten abgelaufen)")
+		return "", fmt.Errorf("login timed out (5 minutes exceeded)")
 	}
 
 	tok, err := conf.Exchange(ctx, code,
 		oauth2.SetAuthURLParam("code_verifier", verifier),
 	)
 	if err != nil {
-		return "", fmt.Errorf("Token-Exchange fehlgeschlagen: %w", err)
+		return "", fmt.Errorf("token exchange failed: %w", err)
 	}
 	if tok.RefreshToken == "" {
-		return "", fmt.Errorf("kein Refresh-Token erhalten — stelle sicher dass 'prompt=consent' erlaubt ist")
+		return "", fmt.Errorf("no refresh token received — make sure 'prompt=consent' is allowed")
 	}
 	return tok.RefreshToken, nil
 }
@@ -118,7 +118,7 @@ func GetAccessToken(clientID, clientSecret, refreshToken string) (string, error)
 	src := conf.TokenSource(context.Background(), tok)
 	newTok, err := src.Token()
 	if err != nil {
-		return "", fmt.Errorf("Token-Refresh fehlgeschlagen (neu einloggen?): %w", err)
+		return "", fmt.Errorf("token refresh failed (try logging in again): %w", err)
 	}
 	return newTok.AccessToken, nil
 }

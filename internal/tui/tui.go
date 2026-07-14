@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -58,7 +59,7 @@ var providers = []providerEntry{
 	{ai.ProviderAnthropic, "Anthropic / Claude", "https://console.anthropic.com/account/keys", "ANTHROPIC_API_KEY"},
 	{ai.ProviderOpenAI, "OpenAI / ChatGPT", "https://platform.openai.com/api-keys", "OPENAI_API_KEY"},
 	{ai.ProviderGemini, "Google Gemini", "https://aistudio.google.com/apikey", "GEMINI_API_KEY"},
-	{ai.ProviderOllama, "Ollama (lokal)", "", ""},
+	{ai.ProviderOllama, "Ollama (local)", "", ""},
 }
 
 // ── view state ───────────────────────────────────────────────────────────────
@@ -266,7 +267,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case habitsLoadedMsg:
-		m.habits = []models.HabitStats(msg)
+		stats := []models.HabitStats(msg)
+		sort.SliceStable(stats, func(i, j int) bool {
+			gi, gj := stats[i].Habit.GroupID, stats[j].Habit.GroupID
+			if gi != gj {
+				return false
+			}
+			return !stats[i].CheckedToday && stats[j].CheckedToday
+		})
+		m.habits = stats
 		if m.cursor >= len(m.habits) {
 			m.cursor = max(0, len(m.habits)-1)
 		}
@@ -373,12 +382,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		config.Save(m.cfg)
 		config.ForceApplyToEnv(m.cfg)
 		m.state = viewList
-		m.message = "Google-Login erfolgreich — Gemini aktiv"
+		m.message = "Google login successful — Gemini active"
 		return m, nil
 
 	case oauthErrMsg:
 		m.state = viewSettings
-		m.message = "Login fehlgeschlagen: " + msg.err.Error()
+		m.message = "Login failed: " + msg.err.Error()
 		m.isErr = true
 		return m, clearAfter()
 
@@ -478,7 +487,7 @@ func (m model) handleList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				if err := s.DeleteCheckIn(name, time.Now()); err != nil {
 					return errMsg{err}
 				}
-				return statusMsg("✗ " + name + " abgehakt")
+				return statusMsg("✗ " + name + " unchecked")
 			}
 		}
 		return m, func() tea.Msg {
@@ -531,7 +540,7 @@ func (m model) handleList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if err := s.ArchiveHabit(name); err != nil {
 				return errMsg{err}
 			}
-			return statusMsg("Archiviert: " + name)
+			return statusMsg("Archived: " + name)
 		}
 
 	case "A":
@@ -542,7 +551,7 @@ func (m model) handleList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "g":
 		m.state = viewGoalInput
 		m.input.Reset()
-		m.input.Placeholder = "z.B. mehr Energie morgens, besser schlafen…"
+		m.input.Placeholder = "e.g. more morning energy, better sleep…"
 		m.input.CharLimit = 120
 		m.input.Focus()
 
@@ -661,7 +670,7 @@ func (m model) handleList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.input.Reset()
 		m.input.SetValue(h.TodayNote)
 		m.input.CursorEnd()
-		m.input.Placeholder = "Notiz für heute…"
+		m.input.Placeholder = "Note for today…"
 		m.input.CharLimit = 200
 		m.input.Focus()
 
@@ -750,7 +759,7 @@ func (m model) handleList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if err := s.DeleteHabit(name); err != nil {
 				return errMsg{err}
 			}
-			return statusMsg("Gelöscht: " + name)
+			return statusMsg("Deleted: " + name)
 		}
 
 	case "S":
@@ -785,7 +794,7 @@ func (m model) handleAddInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.addingIcon = icon
 		m.state = viewAddDesc
 		m.input.Reset()
-		m.input.Placeholder = "// Notiz (optional, enter zum Überspringen)"
+		m.input.Placeholder = "// Note (optional, enter to skip)"
 		m.input.Focus()
 		return m, nil
 	}
@@ -893,7 +902,7 @@ func (m model) handleEditHabit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if err := s.SetHabitSkip(name, skip); err != nil {
 				return errMsg{err}
 			}
-			return statusMsg("✓ " + name + " aktualisiert")
+			return statusMsg("✓ " + name + " updated")
 		}
 	}
 	if m.editCursor <= 1 {
@@ -921,7 +930,7 @@ func (m model) handleGroupMgr(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "a":
 		m.state = viewGroupNew
 		m.input.Reset()
-		m.input.Placeholder = "🌅 Morgen (emoji + Name)"
+		m.input.Placeholder = "🌅 Morning (emoji + name)"
 		m.input.Focus()
 	case "d":
 		if len(m.groups) == 0 {
@@ -933,7 +942,7 @@ func (m model) handleGroupMgr(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if err := s.DeleteGroup(g.ID); err != nil {
 				return errMsg{err}
 			}
-			return statusMsg("Gruppe gelöscht: " + g.Name)
+			return statusMsg("Group deleted: " + g.Name)
 		}
 	}
 	return m, nil
@@ -962,7 +971,7 @@ func (m model) handleGroupNew(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if _, err := s.AddGroup(name, icon); err != nil {
 				return errMsg{err}
 			}
-			return statusMsg("Gruppe erstellt: " + name)
+			return statusMsg("Group created: " + name)
 		}
 	}
 	var cmd tea.Cmd
@@ -1001,7 +1010,7 @@ func (m model) handleGroupPick(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if err := s.SetHabitGroup(habitName, groupID); err != nil {
 				return errMsg{err}
 			}
-			return statusMsg("✓ Gruppe zugewiesen")
+			return statusMsg("✓ Group assigned")
 		}
 	}
 	return m, nil
@@ -1028,7 +1037,7 @@ func (m model) handleHabitDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				if err := s.DeleteCheckIn(name, time.Now()); err != nil {
 					return errMsg{err}
 				}
-				return statusMsg("✗ " + name + " abgehakt")
+				return statusMsg("✗ " + name + " unchecked")
 			}
 		}
 		return m, func() tea.Msg {
@@ -1064,7 +1073,7 @@ func (m model) handleHabitDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.input.Reset()
 		m.input.SetValue(h.TodayNote)
 		m.input.CursorEnd()
-		m.input.Placeholder = "Notiz für heute…"
+		m.input.Placeholder = "Note for today…"
 		m.input.CharLimit = 200
 		m.input.Focus()
 	case "e":
@@ -1122,9 +1131,9 @@ func (m model) handleNoteInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return errMsg{err}
 			}
 			if note != "" {
-				return statusMsg("Notiz gespeichert für " + name)
+				return statusMsg("Note saved for " + name)
 			}
-			return statusMsg("Notiz gelöscht für " + name)
+			return statusMsg("Note cleared for " + name)
 		}
 	}
 	var cmd tea.Cmd
@@ -1163,7 +1172,7 @@ func (m model) handleChainMgr(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if err := s.DeleteChain(ch.ID); err != nil {
 				return errMsg{err}
 			}
-			return statusMsg("Kette gelöscht")
+			return statusMsg("Chain deleted")
 		}
 	case "s":
 		// AI chain suggestions
@@ -1253,7 +1262,7 @@ func (m model) handleChainPick(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if err := s.AddChain(from, to); err != nil {
 				return errMsg{err}
 			}
-			return statusMsg("Kette erstellt: " + from + " → " + to)
+			return statusMsg("Chain created: " + from + " → " + to)
 		}
 	}
 	return m, nil
@@ -1283,7 +1292,7 @@ func (m model) handleArchive(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if err := s.UnarchiveHabit(name); err != nil {
 				return errMsg{err}
 			}
-			return archiveReloadMsg{"✓ " + name + " wiederhergestellt"}
+			return archiveReloadMsg{"✓ " + name + " restored"}
 		}
 	case "d":
 		if len(m.archivedHabits) == 0 {
@@ -1295,7 +1304,7 @@ func (m model) handleArchive(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if err := s.DeleteHabit(name); err != nil {
 				return errMsg{err}
 			}
-			return archiveReloadMsg{"Gelöscht: " + name}
+			return archiveReloadMsg{"Deleted: " + name}
 		}
 	}
 	return m, nil
@@ -1464,7 +1473,7 @@ func (m model) handleSuggest(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					}
 					created = append(created, it.from+" → "+it.to)
 				}
-				return statusMsg("Ketten erstellt: " + strings.Join(created, ", "))
+				return statusMsg("Chains created: " + strings.Join(created, ", "))
 			}
 		}
 		// habit suggest mode
@@ -1494,7 +1503,7 @@ func (m model) handleSuggest(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				}
 				desc := ""
 				for _, d := range it.details {
-					if !strings.HasPrefix(d, "Tipp:") {
+					if !strings.HasPrefix(d, "Tip:") {
 						desc = d
 						break
 					}
@@ -1550,14 +1559,14 @@ func (m model) handleSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			config.Save(m.cfg)
 			config.ForceApplyToEnv(m.cfg)
 			m.state = viewList
-			m.message = "Ollama aktiv (lokal)"
+			m.message = "Ollama active (local)"
 		case ai.ProviderGemini:
 			m.state = viewGeminiMenu
 			m.geminiMenuCursor = 0
 		default:
 			m.state = viewKeyInput
 			m.input.Reset()
-			m.input.Placeholder = "API-Key einfügen…"
+			m.input.Placeholder = "Paste API key…"
 			if k := os.Getenv(p.envKey); k != "" {
 				m.input.SetValue(k)
 			}
@@ -1585,7 +1594,7 @@ func (m model) handleGeminiMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.geminiMenuCursor == 1 {
 			m.state = viewKeyInput
 			m.input.Reset()
-			m.input.Placeholder = "Gemini API-Key einfügen…"
+			m.input.Placeholder = "Paste Gemini API key…"
 			if k := os.Getenv("GEMINI_API_KEY"); k != "" {
 				m.input.SetValue(k)
 			}
@@ -1594,7 +1603,7 @@ func (m model) handleGeminiMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if m.cfg.GoogleClientID == "" {
 				m.state = viewGeminiCID
 				m.input.Reset()
-				m.input.Placeholder = "Client ID einfügen…"
+				m.input.Placeholder = "Paste Client ID…"
 				m.input.Focus()
 			} else {
 				m.state = viewOAuthWait
@@ -1620,7 +1629,7 @@ func (m model) handleGeminiCID(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.geminiClientID = v
 			m.state = viewGeminiCS
 			m.input.Reset()
-			m.input.Placeholder = "Client Secret einfügen…"
+			m.input.Placeholder = "Paste Client Secret…"
 			m.input.Focus()
 		}
 		return m, nil
@@ -1637,7 +1646,7 @@ func (m model) handleGeminiCS(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "esc":
 		m.state = viewGeminiCID
 		m.input.Reset()
-		m.input.Placeholder = "Client ID einfügen…"
+		m.input.Placeholder = "Paste Client ID…"
 		m.input.SetValue(m.geminiClientID)
 		m.input.Focus()
 		return m, nil
@@ -1688,7 +1697,7 @@ func (m model) handleKeyInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			config.Save(m.cfg)
 			config.ForceApplyToEnv(m.cfg)
 			m.state = viewList
-			m.message = p.label + " eingerichtet"
+			m.message = p.label + " configured"
 		}
 		return m, nil
 	}
@@ -1774,6 +1783,27 @@ func (m model) innerWidth() int {
 	return w
 }
 
+// tinyBar renders a compact filled/empty progress bar of given width.
+func tinyBar(done, total, width int) string {
+	if total == 0 || width <= 0 {
+		return styleMuted.Render(strings.Repeat("░", width))
+	}
+	filled := (done * width) / total
+	if filled > width {
+		filled = width
+	}
+	return styleOk.Render(strings.Repeat("█", filled)) + styleMuted.Render(strings.Repeat("░", width-filled))
+}
+
+// dynamicPanel renders a panel with a custom border color.
+func (m model) dynamicPanel(s string, bc lipgloss.AdaptiveColor) string {
+	w := m.width - 2
+	if w < 62 {
+		w = 62
+	}
+	return panelStyle.Width(w).BorderForeground(bc).Render(s)
+}
+
 // ── renderList ────────────────────────────────────────────────────────────────
 
 func (m model) renderList() string {
@@ -1790,29 +1820,56 @@ func (m model) renderList() string {
 			done++
 		}
 	}
-	bestStreak, totalCheckIns := 0, 0
+	bestStreak := 0
 	for _, h := range m.habits {
 		if h.Streak > bestStreak {
 			bestStreak = h.Streak
 		}
-		totalCheckIns += h.TotalDays
 	}
 
-	b.WriteString(styleLime.Bold(true).Render("habctl") +
-		styleMuted.Render("   @habctl $ daily") + "\n")
-	b.WriteString(styleMuted.Render("// "+motivationalMsg(totalCheckIns)) + "\n\n")
+	// precompute border color
+	anyAtRisk := false
+	for _, h := range m.habits {
+		if h.Habit.FreqTarget > 0 {
+			wd := int(time.Now().Weekday())
+			daysLeft := 1
+			if wd != 0 {
+				daysLeft = 8 - wd
+			}
+			needed := h.Habit.FreqTarget - h.WeeklyDone
+			if needed > 0 && daysLeft <= needed {
+				anyAtRisk = true
+				break
+			}
+		} else {
+			if h.Streak > 0 && !h.CheckedToday {
+				anyAtRisk = true
+				break
+			}
+		}
+	}
+	var borderColor lipgloss.AdaptiveColor
+	switch {
+	case total > 0 && done == total:
+		borderColor = colorOk
+	case anyAtRisk:
+		borderColor = colorWarn
+	default:
+		borderColor = colorBorder
+	}
 
-	weekdayDE := [...]string{"Sonntag", "Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag"}
-	monthDE := [...]string{"", "Januar", "Februar", "März", "April", "Mai", "Juni",
-		"Juli", "August", "September", "Oktober", "November", "Dezember"}
-	dateLabel := fmt.Sprintf("%s, %d. %s %d",
-		weekdayDE[today.Weekday()], today.Day(), monthDE[today.Month()], today.Year())
-	b.WriteString(styleFg.Render(dateLabel) + "\n")
+	appName := styleLime.Bold(true).Render("habctl")
+	dateStr := styleMuted.Render(today.Format("Mon, 02 Jan 2006"))
+	pad := innerW - lipgloss.Width(appName) - lipgloss.Width(dateStr)
+	if pad < 1 {
+		pad = 1
+	}
+	b.WriteString(appName + strings.Repeat(" ", pad) + dateStr + "\n")
 
 	var statsLine strings.Builder
 	if bestStreak > 0 {
 		statsLine.WriteString(styleOkBold.Render(fmt.Sprintf("🔥 %d", bestStreak)) +
-			styleMuted.Render(" Tage  ·  "))
+			styleMuted.Render(" days  ·  "))
 	}
 	if total > 0 {
 		var ps lipgloss.Style
@@ -1824,77 +1881,21 @@ func (m model) renderList() string {
 		default:
 			ps = styleMuted
 		}
-		statsLine.WriteString(ps.Render(fmt.Sprintf("%d/%d heute", done, total)) +
-			styleMuted.Render(fmt.Sprintf("  ·  %d Habits", total)))
+		bar := styleMuted.Render("[") + tinyBar(done, total, 6) + styleMuted.Render("]")
+		statsLine.WriteString(bar + " " + ps.Render(fmt.Sprintf("%d/%d", done, total)) +
+			styleMuted.Render(fmt.Sprintf("  ·  %d habits", total)))
 	}
 	b.WriteString(statsLine.String() + "\n\n")
-
-	// ── week calendar strip ───────────────────────────────────────────────────
-
-	if total > 0 {
-		var dayDone [7]int
-		for _, h := range m.habits {
-			for i, chkd := range h.Last7Days {
-				if chkd {
-					dayDone[i]++
-				}
-			}
-		}
-
-		dayAbbrDE := [7]string{"So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"}
-		const slotW = 5
-
-		var rowDay, rowDate, rowBar strings.Builder
-		for i := 0; i < 7; i++ {
-			d := today.AddDate(0, 0, i-6)
-			isToday := i == 6
-			abbr := dayAbbrDE[int(d.Weekday())]
-			dateNum := fmt.Sprintf("%d", d.Day())
-
-			var dayS, dateS lipgloss.Style
-			if isToday {
-				dayS = styleLime.Bold(true)
-				dateS = styleLime.Bold(true)
-			} else {
-				dayS = styleMuted
-				dateS = styleMuted
-			}
-			rowDay.WriteString(lipgloss.NewStyle().Width(slotW).Render(dayS.Render(abbr)))
-			rowDate.WriteString(lipgloss.NewStyle().Width(slotW).Render(dateS.Render(dateNum)))
-
-			pct := 0.0
-			if total > 0 {
-				pct = float64(dayDone[i]) / float64(total)
-			}
-			var blk string
-			switch {
-			case pct >= 1.0:
-				blk = styleOkBold.Render("███")
-			case pct >= 0.67:
-				blk = styleOk.Render("▓▓▓")
-			case pct >= 0.33:
-				blk = styleWarn.Render("▒▒▒")
-			case pct > 0:
-				blk = styleWarn.Render("▒░░")
-			default:
-				blk = styleMuted.Render("░░░")
-			}
-			rowBar.WriteString(lipgloss.NewStyle().Width(slotW).Render(blk))
-		}
-
-		b.WriteString("  " + rowDay.String() + "\n")
-		b.WriteString("  " + rowDate.String() + "\n")
-		b.WriteString("  " + rowBar.String() + "\n\n")
-	}
 
 	// ── habit list ────────────────────────────────────────────────────────────
 
 	if total == 0 {
-		b.WriteString(styleMuted.Render("Noch keine Habits. n zum Anlegen.") + "\n")
+		b.WriteString(styleMuted.Render("No habits yet. n to add one.") + "\n")
 	} else {
-		const cbW = 4  // "[✓] "
-		const skW = 10 // right-aligned streak column
-		nameW := innerW - cbW - skW
+		const cbW = 4   // "[✓] "
+		const dotsW = 9 // 7-day dots + trailing space
+		const skW = 8   // right-aligned streak column
+		nameW := innerW - cbW - dotsW - skW
 		if nameW < 20 {
 			nameW = 20
 		}
@@ -1920,7 +1921,8 @@ func (m model) renderList() string {
 							}
 						}
 					}
-					counter := fmt.Sprintf("[%d/%d] ▼", gDone, gTotal)
+					minibar := styleMuted.Render("[") + tinyBar(gDone, gTotal, 4) + styleMuted.Render("]")
+					counter := minibar + styleMuted.Render(fmt.Sprintf(" %d/%d", gDone, gTotal))
 					ctrW := lipgloss.Width(counter)
 					groupNameW := innerW - ctrW - 1
 					if groupNameW < 1 {
@@ -1929,7 +1931,7 @@ func (m model) renderList() string {
 					glabel := lipgloss.NewStyle().Width(groupNameW).Render(
 						styleGroup.Render(truncate(label, groupNameW-1)),
 					)
-					b.WriteString("\n" + glabel + " " + styleMuted.Render(counter) + "\n")
+					b.WriteString("\n" + glabel + " " + counter + "\n")
 				} else if i > 0 {
 					b.WriteString("\n")
 				}
@@ -1969,6 +1971,26 @@ func (m model) renderList() string {
 				ns = styleMuted
 			}
 
+			// per-habit 7-day dots
+			var dotsBuf strings.Builder
+			for di, chkd := range h.Last7Days {
+				isToday := di == 6
+				if chkd {
+					if isToday {
+						dotsBuf.WriteString(styleOkBold.Render("●"))
+					} else {
+						dotsBuf.WriteString(styleOk.Render("●"))
+					}
+				} else {
+					if isToday && atRisk {
+						dotsBuf.WriteString(styleWarnBd.Render("○"))
+					} else {
+						dotsBuf.WriteString(styleMuted.Render("○"))
+					}
+				}
+			}
+			dotsCol := lipgloss.NewStyle().Width(dotsW).Render(dotsBuf.String())
+
 			var rawName string
 			if h.Habit.Icon != "" {
 				rawName = h.Habit.Icon + " " + truncate(h.Habit.Name, nameW-4)
@@ -1979,7 +2001,6 @@ func (m model) renderList() string {
 
 			var skContent string
 			if h.Habit.FreqTarget > 0 {
-				// weekly habit: show "done/target W" + streak weeks
 				weekInfo := fmt.Sprintf("%d/%dW", h.WeeklyDone, h.Habit.FreqTarget)
 				switch {
 				case h.CheckedToday && h.Streak > 0:
@@ -2005,11 +2026,11 @@ func (m model) renderList() string {
 			}
 			skCol := lipgloss.NewStyle().Width(skW).Align(lipgloss.Right).Render(skContent)
 
-			b.WriteString(cb + nameCol + skCol + "\n")
+			b.WriteString(cb + nameCol + dotsCol + skCol + "\n")
 
 			if !m.compact {
 				const descMaxW = 58
-				const subIndent = "      " // 6 spaces — aligns under name (past checkbox)
+				const subIndent = "      "
 				if h.Habit.Description != "" {
 					b.WriteString(subIndent + styleMuted.Render(truncate(h.Habit.Description, descMaxW)) + "\n")
 				}
@@ -2020,7 +2041,7 @@ func (m model) renderList() string {
 					b.WriteString(subIndent + styleMuted.Render("→ "+h.ChainTo) + "\n")
 				}
 			}
-			b.WriteString("\n") // spacing between habits
+			b.WriteString("\n")
 		}
 	}
 
@@ -2033,41 +2054,30 @@ func (m model) renderList() string {
 		b.WriteString(msgStyle.Render(m.message) + "\n\n")
 	}
 
-	b.WriteString(styleMuted.Render("space ✓/✗ · ↵ öffnen · n neu · e edit · s KI · r review · ? hilfe · q"))
-	return m.panel(b.String())
+	fk := func(key, label string) string {
+		return styleMuted.Render("[") + styleLime.Render(key) + styleMuted.Render("] "+label)
+	}
+	footer := fk("space", "✓/✗") + styleMuted.Render("  ") +
+		fk("↵", "open") + styleMuted.Render("  ") +
+		fk("n", "new") + styleMuted.Render("  ") +
+		fk("e", "edit") + styleMuted.Render("  ") +
+		fk("s", "AI") + styleMuted.Render("  ") +
+		fk("r", "review") + styleMuted.Render("  ") +
+		fk("?", "help") + styleMuted.Render("  ") +
+		fk("q", "quit")
+	b.WriteString(footer)
+	return m.dynamicPanel(b.String(), borderColor)
 }
 
-func motivationalMsg(checkIns int) string {
-	switch {
-	case checkIns == 0:
-		return "Fange heute an."
-	case checkIns < 5:
-		return "Die ersten Schritte."
-	case checkIns < 15:
-		return "Der Rhythmus beginnt."
-	case checkIns < 30:
-		return "Du bist dabei."
-	case checkIns < 50:
-		return "Halbzeit der ersten 50."
-	case checkIns < 100:
-		return "Die Daten fangen an, etwas zu bedeuten."
-	case checkIns < 200:
-		return "Echte Konstanz."
-	case checkIns < 365:
-		return "Gewohnheit ist Charakter."
-	default:
-		return "Ein Jahr. Unstoppbar."
-	}
-}
 
 // ── renderAddInput ────────────────────────────────────────────────────────────
 
 func (m model) renderAddInput() string {
 	var b strings.Builder
-	b.WriteString(styleLime.Bold(true).Render("Neuer Habit") + "\n\n")
-	b.WriteString(styleMuted.Render("Tipp: emoji als Prefix — 🏃 Laufen, ☕ Kaffee, 📚 Lesen") + "\n\n")
+	b.WriteString(styleLime.Bold(true).Render("New Habit") + "\n\n")
+	b.WriteString(styleMuted.Render("Tip: emoji prefix — 🏃 Running, ☕ Coffee, 📚 Reading") + "\n\n")
 	b.WriteString(m.input.View() + "\n\n")
-	b.WriteString(styleMuted.Render("enter weiter · esc abbrechen"))
+	b.WriteString(styleMuted.Render("enter continue · esc cancel"))
 	return m.panel(b.String())
 }
 
@@ -2080,9 +2090,9 @@ func (m model) renderAddDesc() string {
 		icon = m.addingIcon + " "
 	}
 	b.WriteString(styleLime.Bold(true).Render(icon+m.addingName) + "\n\n")
-	b.WriteString(styleMuted.Render("Kurze Notiz? (enter zum Überspringen)") + "\n\n")
+	b.WriteString(styleMuted.Render("Short note? (enter to skip)") + "\n\n")
 	b.WriteString(m.input.View() + "\n\n")
-	b.WriteString(styleMuted.Render("enter speichern · esc überspringen"))
+	b.WriteString(styleMuted.Render("enter save · esc skip"))
 	return m.panel(b.String())
 }
 
@@ -2090,7 +2100,7 @@ func (m model) renderAddDesc() string {
 
 func (m model) renderEditHabit() string {
 	var b strings.Builder
-	b.WriteString(styleLime.Bold(true).Render("Habit bearbeiten") + "\n\n")
+	b.WriteString(styleLime.Bold(true).Render("Edit Habit") + "\n\n")
 
 	row := func(active bool, label, value string) {
 		cursor := "  "
@@ -2108,15 +2118,15 @@ func (m model) renderEditHabit() string {
 	case 0:
 		b.WriteString(styleLime.Render("▶ ") + styleFg.Render("Name / Icon:") + "\n")
 		b.WriteString("    " + m.input.View() + "\n\n")
-		row(false, "Beschreibung", m.editDescBuf)
+		row(false, "Description", m.editDescBuf)
 	case 1:
 		row(false, "Name / Icon", m.editNameBuf)
 		b.WriteString("\n")
-		b.WriteString(styleLime.Render("▶ ") + styleFg.Render("Beschreibung:") + "\n")
+		b.WriteString(styleLime.Render("▶ ") + styleFg.Render("Description:") + "\n")
 		b.WriteString("    " + m.input.View() + "\n")
 	default:
 		row(false, "Name / Icon", m.editNameBuf)
-		row(false, "Beschreibung", m.editDescBuf)
+		row(false, "Description", m.editDescBuf)
 	}
 
 	b.WriteString("\n")
@@ -2130,13 +2140,13 @@ func (m model) renderEditHabit() string {
 		freqCursor = styleLime.Render("▶ ")
 		freqStyle = styleFg
 	}
-	freqVal := "täglich"
+	freqVal := "daily"
 	if m.editFreq > 0 {
-		freqVal = fmt.Sprintf("%d× pro Woche", m.editFreq)
+		freqVal = fmt.Sprintf("%d× per week", m.editFreq)
 	}
-	b.WriteString(freqCursor + freqStyle.Render("Häufigkeit:") + "  ")
+	b.WriteString(freqCursor + freqStyle.Render("Frequency:") + "  ")
 	if freqActive {
-		b.WriteString(styleFg.Bold(true).Render(freqVal) + "  " + styleMuted.Render("+/- ändern"))
+		b.WriteString(styleFg.Bold(true).Render(freqVal) + "  " + styleMuted.Render("+/- to change"))
 	} else {
 		b.WriteString(styleMuted.Render(freqVal))
 	}
@@ -2148,24 +2158,24 @@ func (m model) renderEditHabit() string {
 		skipCursor = styleLime.Render("▶ ")
 		skipStyle = styleFg
 	}
-	skipVal := "kein Skip"
+	skipVal := "no skip"
 	if m.editSkip > 0 {
-		skipVal = fmt.Sprintf("%d Fehltag%s ok", m.editSkip, func() string {
+		skipVal = fmt.Sprintf("%d missed day%s ok", m.editSkip, func() string {
 			if m.editSkip == 1 {
 				return ""
 			}
-			return "e"
+			return "s"
 		}())
 	}
-	b.WriteString(skipCursor + skipStyle.Render("Skip-Toleranz:") + "  ")
+	b.WriteString(skipCursor + skipStyle.Render("Skip tolerance:") + "  ")
 	if skipActive {
-		b.WriteString(styleFg.Bold(true).Render(skipVal) + "  " + styleMuted.Render("+/- ändern"))
+		b.WriteString(styleFg.Bold(true).Render(skipVal) + "  " + styleMuted.Render("+/- to change"))
 	} else {
 		b.WriteString(styleMuted.Render(skipVal))
 	}
 	b.WriteString("\n")
 
-	b.WriteString("\n" + styleMuted.Render("enter speichern · tab nächstes Feld · +/- bei Zahlen · esc abbrechen"))
+	b.WriteString("\n" + styleMuted.Render("enter save · tab next field · +/- for numbers · esc cancel"))
 	return m.panel(b.String())
 }
 
@@ -2173,10 +2183,10 @@ func (m model) renderEditHabit() string {
 
 func (m model) renderGroupMgr() string {
 	var b strings.Builder
-	b.WriteString(styleLime.Bold(true).Render("Gruppen") + "\n\n")
+	b.WriteString(styleLime.Bold(true).Render("Groups") + "\n\n")
 
 	if len(m.groups) == 0 {
-		b.WriteString(styleMuted.Render("Noch keine Gruppen. a zum Anlegen.") + "\n\n")
+		b.WriteString(styleMuted.Render("No groups yet. a to create one.") + "\n\n")
 	} else {
 		for i, g := range m.groups {
 			cursor := "  "
@@ -2202,7 +2212,7 @@ func (m model) renderGroupMgr() string {
 		b.WriteString("\n")
 	}
 
-	b.WriteString(styleMuted.Render("a neu · d löschen · j/k navigieren · esc zurück"))
+	b.WriteString(styleMuted.Render("a new · d delete · j/k navigate · esc back"))
 	return m.panel(b.String())
 }
 
@@ -2210,10 +2220,10 @@ func (m model) renderGroupMgr() string {
 
 func (m model) renderGroupNew() string {
 	var b strings.Builder
-	b.WriteString(styleLime.Bold(true).Render("Neue Gruppe") + "\n\n")
-	b.WriteString(styleMuted.Render("Tipp: mit Emoji starten — 🌅 Morgen, 💻 Arbeit, 🌙 Abend") + "\n\n")
+	b.WriteString(styleLime.Bold(true).Render("New Group") + "\n\n")
+	b.WriteString(styleMuted.Render("Tip: start with emoji — 🌅 Morning, 💻 Work, 🌙 Evening") + "\n\n")
 	b.WriteString(m.input.View() + "\n\n")
-	b.WriteString(styleMuted.Render("enter erstellen · esc abbrechen"))
+	b.WriteString(styleMuted.Render("enter create · esc cancel"))
 	return m.panel(b.String())
 }
 
@@ -2229,10 +2239,10 @@ func (m model) renderGroupPick() string {
 			habitName = h.Icon + " " + habitName
 		}
 	}
-	b.WriteString(styleLime.Bold(true).Render("Gruppe zuweisen") + "\n")
+	b.WriteString(styleLime.Bold(true).Render("Assign Group") + "\n")
 	b.WriteString(styleMuted.Render("→ "+habitName) + "\n\n")
 
-	options := append([]models.Group{{Name: "Kein (ungrouped)", Icon: "○"}}, m.groups...)
+	options := append([]models.Group{{Name: "None (ungrouped)", Icon: "○"}}, m.groups...)
 	for i, g := range options {
 		cursor := "  "
 		labelStyle := lipgloss.NewStyle().Foreground(colorMuted)
@@ -2247,7 +2257,7 @@ func (m model) renderGroupPick() string {
 		b.WriteString(cursor + labelStyle.Render(icon+g.Name) + "\n")
 	}
 
-	b.WriteString("\n" + styleMuted.Render("enter wählen · j/k navigieren · esc abbrechen"))
+	b.WriteString("\n" + styleMuted.Render("enter select · j/k navigate · esc cancel"))
 	return m.panel(b.String())
 }
 
@@ -2259,11 +2269,11 @@ func (m model) renderStats() string {
 	byDate := cal.ByDate
 
 	var b strings.Builder
-	b.WriteString(styleLime.Bold(true).Render("Statistiken") + "\n\n")
+	b.WriteString(styleLime.Bold(true).Render("Stats") + "\n\n")
 
 	if total == 0 {
-		b.WriteString(styleMuted.Render("Erst Habits anlegen (n), dann kommen hier Daten.") + "\n")
-		b.WriteString("\n" + styleMuted.Render("esc zurück"))
+		b.WriteString(styleMuted.Render("Add habits first (n), then data will appear here.") + "\n")
+		b.WriteString("\n" + styleMuted.Render("esc back"))
 		return m.panel(b.String())
 	}
 
@@ -2303,7 +2313,7 @@ func (m model) renderStats() string {
 	numV := lipgloss.NewStyle().Foreground(colorLime).Bold(true)
 	lbl := styleMuted
 
-	b.WriteString(styleMuted.Render("// überblick") + "\n")
+	b.WriteString(styleMuted.Render("// overview") + "\n")
 	b.WriteString(fmt.Sprintf("  %s %s   %s %s   %s %s\n",
 		numV.Render(fmt.Sprintf("%d", daysTracked)), lbl.Render("days tracked"),
 		numV.Render(fmt.Sprintf("%.0f%%", avgCompletion)), lbl.Render("avg"),
@@ -2311,14 +2321,14 @@ func (m model) renderStats() string {
 	))
 	if bestStreak > 0 {
 		b.WriteString(fmt.Sprintf("  %s %s  %s\n",
-			lbl.Render("🔥 aktuell:"),
+			lbl.Render("🔥 current:"),
 			numV.Render(fmt.Sprintf("%d days", bestStreak)),
 			lbl.Render("— "+truncate(bestName, 24)),
 		))
 	}
 	if bestLongest > bestStreak {
 		b.WriteString(fmt.Sprintf("  %s %s  %s\n",
-			lbl.Render("   längster:"),
+			lbl.Render("   longest:"),
 			numV.Render(fmt.Sprintf("%d days", bestLongest)),
 			lbl.Render("— "+truncate(bestLongestName, 24)),
 		))
@@ -2326,7 +2336,7 @@ func (m model) renderStats() string {
 
 	// ── heatmap ──────────────────────────────────────────────────────────────
 	const weeks = 26
-	b.WriteString("\n" + styleMuted.Render("// contributions (26 Wochen)") + "\n")
+	b.WriteString("\n" + styleMuted.Render("// contributions (26 weeks)") + "\n")
 
 	wd := int(today.Weekday())
 	daysFromMon := (wd + 6) % 7
@@ -2397,7 +2407,7 @@ func (m model) renderStats() string {
 		heat[4].Render("█") + styleMuted.Render(" 100%") + "\n")
 
 	// ── day of week ───────────────────────────────────────────────────────────
-	b.WriteString("\n" + styleMuted.Render("// wochentag") + "\n")
+	b.WriteString("\n" + styleMuted.Render("// day of week") + "\n")
 	var dowCount [7]int
 	var dowTotal [7]int
 	for dateStr, cnt := range byDate {
@@ -2425,7 +2435,7 @@ func (m model) renderStats() string {
 			styleMuted.Render(fmt.Sprintf("%3.0f%%", pct*100))))
 	}
 
-	b.WriteString("\n" + styleMuted.Render("esc zurück"))
+	b.WriteString("\n" + styleMuted.Render("esc back"))
 	return m.panel(b.String())
 }
 
@@ -2437,11 +2447,11 @@ func (m model) renderSuggest() string {
 	if info, err := ai.Detect(); err == nil {
 		providerLabel = styleMuted.Render("via " + info.Display)
 	} else {
-		providerLabel = styleWarn.Render("kein Provider — S für Settings")
+		providerLabel = styleWarn.Render("no provider — S for settings")
 	}
 
 	if m.suggestMode == "chain" {
-		b.WriteString(styleLime.Bold(true).Render("Ketten-Vorschläge") + "  " + providerLabel + "\n\n")
+		b.WriteString(styleLime.Bold(true).Render("Chain Suggestions") + "  " + providerLabel + "\n\n")
 
 		if len(m.chainSuggestItems) > 0 {
 			checkOff := styleMuted.Render("[ ]")
@@ -2482,25 +2492,25 @@ func (m model) renderSuggest() string {
 				}
 			}
 			if selectedCount > 0 {
-				b.WriteString(styleOk.Render(fmt.Sprintf("%d ausgewählt", selectedCount)) + "  ")
+				b.WriteString(styleOk.Render(fmt.Sprintf("%d selected", selectedCount)) + "  ")
 			}
-			b.WriteString(styleMuted.Render("space ✓ · enter anwenden · a alle · j/k · esc zurück"))
+			b.WriteString(styleMuted.Render("space ✓ · enter apply · a all · j/k · esc back"))
 		} else if !m.suggestDone {
-			b.WriteString(styleMuted.Render("Analysiere Habit-Verbindungen…") + "\n\n")
+			b.WriteString(styleMuted.Render("Analysing habit connections…") + "\n\n")
 			b.WriteString(styleLime.Render("▌"))
 		} else {
-			b.WriteString(styleWarn.Render("Keine Vorschläge. Mindestens 2 Habits brauche ich.") + "\n")
-			b.WriteString(styleMuted.Render("esc zurück"))
+			b.WriteString(styleWarn.Render("No suggestions. I need at least 2 habits.") + "\n")
+			b.WriteString(styleMuted.Render("esc back"))
 		}
 		return m.panel(b.String())
 	}
 
 	// ── habit / decompose suggest mode ───────────────────────────────────────
-	title := "Habit-Vorschläge"
-	loadingMsg := "Generiere Vorschläge…"
+	title := "Habit Suggestions"
+	loadingMsg := "Generating suggestions…"
 	if m.suggestMode == "decompose" {
-		title = "Ziel-Habits"
-		loadingMsg = "Analysiere Ziel und erstelle Habits…"
+		title = "Goal Habits"
+		loadingMsg = "Analysing goal and creating habits…"
 	}
 	b.WriteString(styleLime.Bold(true).Render(title) + "  " + providerLabel + "\n\n")
 
@@ -2550,17 +2560,17 @@ func (m model) renderSuggest() string {
 			}
 		}
 		if selectedCount > 0 {
-			b.WriteString(styleOk.Render(fmt.Sprintf("%d ausgewählt", selectedCount)) + "  ")
+			b.WriteString(styleOk.Render(fmt.Sprintf("%d selected", selectedCount)) + "  ")
 		}
-		b.WriteString(styleMuted.Render("space ✓ · enter hinzufügen · a alle · j/k · esc zurück"))
+		b.WriteString(styleMuted.Render("space ✓ · enter add · a all · j/k · esc back"))
 	} else if !m.suggestDone {
 		b.WriteString(styleMuted.Render(loadingMsg) + "\n\n")
 		b.WriteString(styleLime.Render(blinkCursor))
 	} else {
-		b.WriteString(styleWarn.Render("Format nicht erkannt.") + "\n")
-		b.WriteString(styleMuted.Render("s   nochmal versuchen") + "\n")
-		b.WriteString(styleMuted.Render("n   manuell hinzufügen") + "\n")
-		b.WriteString(styleMuted.Render("esc zurück"))
+		b.WriteString(styleWarn.Render("Format not recognised.") + "\n")
+		b.WriteString(styleMuted.Render("s   try again") + "\n")
+		b.WriteString(styleMuted.Render("n   add manually") + "\n")
+		b.WriteString(styleMuted.Render("esc back"))
 	}
 
 	return m.panel(b.String())
@@ -2570,8 +2580,8 @@ func (m model) renderSuggest() string {
 
 func (m model) renderSettings() string {
 	var b strings.Builder
-	b.WriteString(styleLime.Bold(true).Render("KI-Provider") + "\n")
-	b.WriteString(styleMuted.Render("Wähle deinen KI-Anbieter und richte ihn ein.") + "\n\n")
+	b.WriteString(styleLime.Bold(true).Render("AI Provider") + "\n")
+	b.WriteString(styleMuted.Render("Select your AI provider and configure it.") + "\n\n")
 
 	activeProvider := ai.Provider(os.Getenv("HABCTL_PROVIDER"))
 	if activeProvider == "" {
@@ -2603,7 +2613,7 @@ func (m model) renderSettings() string {
 
 		var badge string
 		if p.id == ai.ProviderOllama {
-			badge = styleOk.Render("● lokal")
+			badge = styleOk.Render("● local")
 		} else {
 			var activeKey string
 			switch p.id {
@@ -2625,23 +2635,23 @@ func (m model) renderSettings() string {
 			}
 			oauthActive := p.id == ai.ProviderGemini && m.cfg.GoogleRefreshToken != ""
 			if oauthActive {
-				badge = styleOk.Render("● OAuth aktiv")
+				badge = styleOk.Render("● OAuth active")
 			} else if activeKey != "" {
 				suffix := activeKey
 				if len(suffix) > 4 {
 					suffix = "…" + suffix[len(suffix)-4:]
 				}
-				badge = styleOk.Render("● Key gesetzt") + styleMuted.Render(" ("+suffix+")")
+				badge = styleOk.Render("● Key set") + styleMuted.Render(" ("+suffix+")")
 			} else {
-				badge = styleMuted.Render("○ kein Key")
+				badge = styleMuted.Render("○ no key")
 			}
 		}
 		if active {
-			badge += " " + styleLime.Render("← aktiv")
+			badge += " " + styleLime.Render("← active")
 		}
 		b.WriteString(cursor + label + "  " + badge + "\n")
 	}
-	b.WriteString("\n" + styleMuted.Render("enter konfigurieren · j/k navigieren · esc zurück"))
+	b.WriteString("\n" + styleMuted.Render("enter configure · j/k navigate · esc back"))
 	return m.panel(b.String())
 }
 
@@ -2650,19 +2660,19 @@ func (m model) renderSettings() string {
 func (m model) renderKeyInput() string {
 	var b strings.Builder
 	p := providers[m.settingsCursor]
-	b.WriteString(styleLime.Bold(true).Render(p.label+" einrichten") + "\n\n")
+	b.WriteString(styleLime.Bold(true).Render(p.label+" setup") + "\n\n")
 	switch p.id {
 	case ai.ProviderGemini:
-		b.WriteString(styleMuted.Render("o  Browser öffnen: aistudio.google.com") + "\n")
-		b.WriteString(styleMuted.Render("   → Mit Google-Account einloggen → 'Get API key'") + "\n\n")
+		b.WriteString(styleMuted.Render("o  open browser: aistudio.google.com") + "\n")
+		b.WriteString(styleMuted.Render("   → log in with Google → 'Get API key'") + "\n\n")
 	default:
 		if p.keyPage != "" {
-			b.WriteString(styleOk.Render("o") + styleMuted.Render("  öffnet "+p.keyPage) + "\n\n")
+			b.WriteString(styleOk.Render("o") + styleMuted.Render("  opens "+p.keyPage) + "\n\n")
 		}
 	}
-	b.WriteString(styleMuted.Render("API-Key (Cmd+V):") + "\n")
+	b.WriteString(styleMuted.Render("API Key (Cmd+V):") + "\n")
 	b.WriteString("  " + m.input.View() + "\n\n")
-	b.WriteString(styleMuted.Render("enter speichern · o Browser öffnen · esc zurück"))
+	b.WriteString(styleMuted.Render("enter save · o open browser · esc back"))
 	return m.panel(b.String())
 }
 
@@ -2672,8 +2682,8 @@ func (m model) renderGeminiMenu() string {
 	var b strings.Builder
 	b.WriteString(styleLime.Bold(true).Render("Google Gemini") + "\n\n")
 	options := []struct{ label, desc string }{
-		{"Browser Login (Google-Account)", "Kein Key nötig — Login im Browser"},
-		{"API Key", "Von aistudio.google.com"},
+		{"Browser Login (Google Account)", "No key needed — login in browser"},
+		{"API Key", "From aistudio.google.com"},
 	}
 	for i, o := range options {
 		cursor := "  "
@@ -2686,44 +2696,44 @@ func (m model) renderGeminiMenu() string {
 		b.WriteString("    " + styleMuted.Render(o.desc) + "\n\n")
 	}
 	if m.cfg.GoogleRefreshToken != "" {
-		b.WriteString(styleOk.Render("● bereits eingeloggt (OAuth)") + "\n\n")
+		b.WriteString(styleOk.Render("● already logged in (OAuth)") + "\n\n")
 	}
-	b.WriteString(styleMuted.Render("enter auswählen · j/k navigieren · esc zurück"))
+	b.WriteString(styleMuted.Render("enter select · j/k navigate · esc back"))
 	return m.panel(b.String())
 }
 
 func (m model) renderGeminiCID() string {
 	var b strings.Builder
-	b.WriteString(styleLime.Bold(true).Render("Google OAuth2 Client einrichten") + "\n\n")
-	b.WriteString(styleOk.Render("o") + styleMuted.Render("  öffnet console.cloud.google.com/apis/credentials") + "\n\n")
-	b.WriteString(styleMuted.Render("1. Projekt wählen · 2. Create Credentials → OAuth 2.0 Client ID") + "\n")
-	b.WriteString(styleMuted.Render("3. Typ: Desktop-App · 4. Client ID kopieren") + "\n\n")
+	b.WriteString(styleLime.Bold(true).Render("Set up Google OAuth2 Client") + "\n\n")
+	b.WriteString(styleOk.Render("o") + styleMuted.Render("  opens console.cloud.google.com/apis/credentials") + "\n\n")
+	b.WriteString(styleMuted.Render("1. Select project · 2. Create Credentials → OAuth 2.0 Client ID") + "\n")
+	b.WriteString(styleMuted.Render("3. Type: Desktop App · 4. Copy Client ID") + "\n\n")
 	b.WriteString(styleMuted.Render("Client ID:") + "\n")
 	b.WriteString("  " + m.input.View() + "\n\n")
-	b.WriteString(styleMuted.Render("enter weiter · o Browser öffnen · esc zurück"))
+	b.WriteString(styleMuted.Render("enter continue · o open browser · esc back"))
 	return m.panel(b.String())
 }
 
 func (m model) renderGeminiCS() string {
 	var b strings.Builder
 	b.WriteString(styleLime.Bold(true).Render("Google OAuth2 Client Secret") + "\n\n")
-	b.WriteString(styleMuted.Render("Client Secret von der gleichen Credentials-Seite:") + "\n\n")
+	b.WriteString(styleMuted.Render("Client Secret from the same credentials page:") + "\n\n")
 	b.WriteString(styleMuted.Render("Client Secret:") + "\n")
 	b.WriteString("  " + m.input.View() + "\n\n")
-	b.WriteString(styleMuted.Render("enter Browser-Login starten · esc zurück"))
+	b.WriteString(styleMuted.Render("enter start browser login · esc back"))
 	return m.panel(b.String())
 }
 
 func (m model) renderOAuthWait() string {
 	var b strings.Builder
-	b.WriteString(styleLime.Bold(true).Render("Warte auf Google-Login…") + "\n\n")
+	b.WriteString(styleLime.Bold(true).Render("Waiting for Google login…") + "\n\n")
 	b.WriteString(styleMuted.Render(
-		"Browser wurde geöffnet.\n\n"+
-			"1. Mit Google-Account einloggen\n"+
-			"2. habctl Zugriff erlauben\n"+
-			"3. Seite zeigt \"Login erfolgreich\" → fertig\n\n"+
-			"Timeout: 5 Minuten") + "\n")
-	b.WriteString("\n" + styleLime.Render("⠿ ") + styleMuted.Render("warte…"))
+		"Browser opened.\n\n"+
+			"1. Log in with your Google account\n"+
+			"2. Allow habctl access\n"+
+			"3. Page shows \"Login successful\" → done\n\n"+
+			"Timeout: 5 minutes") + "\n")
+	b.WriteString("\n" + styleLime.Render("⠿ ") + styleMuted.Render("waiting…"))
 	return m.panel(b.String())
 }
 
@@ -2752,24 +2762,24 @@ func (m model) renderHelp() string {
 	b.WriteString(row("k / ↑", "move up"))
 	b.WriteString(section("Habits"))
 	b.WriteString(row("space", "check in / undo check-in (toggle)"))
-	b.WriteString(row("enter", "Habit öffnen (Detail, Beschreibung, Notizen-History)"))
-	b.WriteString(row("N", "Notiz zu heutigem Check-in hinzufügen"))
-	b.WriteString(row("n", "neuen Habit anlegen (+ optionales Emoji)"))
-	b.WriteString(row("e", "Habit bearbeiten (Name, Desc, Häufigkeit, Skip)"))
-	b.WriteString(row("a", "Habit archivieren (History bleibt)"))
-	b.WriteString(row("A", "Archiv öffnen (wiederherstellen / löschen)"))
-	b.WriteString(row("d", "Habit endgültig löschen"))
-	b.WriteString(section("Gruppen"))
-	b.WriteString(row("m", "Habit in Gruppe verschieben"))
-	b.WriteString(row("G", "Gruppen verwalten (add, delete)"))
-	b.WriteString(section("KI & Views"))
-	b.WriteString(row("s", "KI-Vorschläge (kontextbewusst)"))
-	b.WriteString(row("g", "Ziel → 3 verknüpfte Habits (Decompose)"))
-	b.WriteString(row("r", "KI-Wochenreview — Pattern-Coaching-Briefing"))
-	b.WriteString(row("t", "Statistiken — Heatmap & Completion"))
-	b.WriteString(row("c", "Habit-Ketten verwalten"))
-	b.WriteString(row("S", "Settings — Provider & API-Keys"))
-	b.WriteString(row("v", "kompakt/normal toggle (Beschreibungen ein/aus)"))
+	b.WriteString(row("enter", "open habit (detail, description, note history)"))
+	b.WriteString(row("N", "add note to today's check-in"))
+	b.WriteString(row("n", "new habit (optional emoji prefix)"))
+	b.WriteString(row("e", "edit habit (name, desc, frequency, skip)"))
+	b.WriteString(row("a", "archive habit (history preserved)"))
+	b.WriteString(row("A", "open archive (restore / delete)"))
+	b.WriteString(row("d", "delete habit permanently"))
+	b.WriteString(section("Groups"))
+	b.WriteString(row("m", "move habit to group"))
+	b.WriteString(row("G", "manage groups (add, delete)"))
+	b.WriteString(section("AI & Views"))
+	b.WriteString(row("s", "AI suggestions (context-aware)"))
+	b.WriteString(row("g", "goal → 3 linked habits (decompose)"))
+	b.WriteString(row("r", "AI weekly review — pattern coaching briefing"))
+	b.WriteString(row("t", "stats — heatmap & completion"))
+	b.WriteString(row("c", "manage habit chains"))
+	b.WriteString(row("S", "settings — provider & API keys"))
+	b.WriteString(row("v", "compact/normal toggle (hide/show descriptions)"))
 	b.WriteString(row("w", "toggle 7d / 30d streak window"))
 	b.WriteString(section("Status"))
 	b.WriteString(row(styleOk.Render("✓  green"), "checked in today"))
@@ -2778,7 +2788,7 @@ func (m model) renderHelp() string {
 	b.WriteString(section("Other"))
 	b.WriteString(row("?", "toggle this help screen"))
 	b.WriteString(row("q / ctrl+c", "quit"))
-	b.WriteString("\n  " + styleMuted.Render("esc / ?   close help"))
+	b.WriteString("\n  " + styleMuted.Render("esc / ?  close help"))
 	return m.panel(b.String())
 }
 
@@ -2786,7 +2796,7 @@ func (m model) renderHelp() string {
 
 func (m model) renderHabitDetail() string {
 	if len(m.habits) == 0 {
-		return m.panel(styleMuted.Render("Kein Habit ausgewählt."))
+		return m.panel(styleMuted.Render("No habit selected."))
 	}
 	h := m.habits[m.cursor]
 	habit := h.Habit
@@ -2805,13 +2815,13 @@ func (m model) renderHabitDetail() string {
 
 	switch {
 	case h.CheckedToday && h.Streak > 0:
-		b.WriteString(styleOk.Render(fmt.Sprintf("✓ heute  ·  🔥 %d Tage", h.Streak)) + "\n")
+		b.WriteString(styleOk.Render(fmt.Sprintf("✓ today  ·  🔥 %d days", h.Streak)) + "\n")
 	case h.CheckedToday:
-		b.WriteString(styleOk.Render("✓ heute erledigt") + "\n")
+		b.WriteString(styleOk.Render("✓ done today") + "\n")
 	case h.Streak > 0:
-		b.WriteString(styleWarn.Render(fmt.Sprintf("noch offen  ·  🔥 %d Tage in Gefahr", h.Streak)) + "\n")
+		b.WriteString(styleWarn.Render(fmt.Sprintf("not done yet  ·  🔥 %d day streak at risk", h.Streak)) + "\n")
 	default:
-		b.WriteString(styleMuted.Render("noch nicht erledigt heute") + "\n")
+		b.WriteString(styleMuted.Render("not done today") + "\n")
 	}
 
 	// ── description ───────────────────────────────────────────────────────────
@@ -2829,7 +2839,7 @@ func (m model) renderHabitDetail() string {
 	// ── today's note ──────────────────────────────────────────────────────────
 	if h.TodayNote != "" {
 		b.WriteString("\n")
-		b.WriteString(ind + styleMuted.Render("Notiz heute") + "\n")
+		b.WriteString(ind + styleMuted.Render("Note today") + "\n")
 		for _, line := range strings.Split(wordWrap(h.TodayNote, maxW-len(ind)), "\n") {
 			if line != "" {
 				b.WriteString(ind + styleFg.Render(line) + "\n")
@@ -2848,7 +2858,7 @@ func (m model) renderHabitDetail() string {
 		}
 		if len(pastNotes) > 0 {
 			b.WriteString("\n")
-			b.WriteString(ind + styleMuted.Render("Frühere Notizen") + "\n")
+			b.WriteString(ind + styleMuted.Render("Past notes") + "\n")
 			for _, n := range pastNotes {
 				b.WriteString(ind + styleMuted.Render(n.Date+"  ") +
 					styleFg.Render(truncate(n.Note, maxW-len(ind)-13)) + "\n")
@@ -2858,9 +2868,9 @@ func (m model) renderHabitDetail() string {
 
 	// ── 7-day history ─────────────────────────────────────────────────────────
 	b.WriteString("\n")
-	b.WriteString(ind + styleMuted.Render("Letzte 7 Tage") + "\n")
+	b.WriteString(ind + styleMuted.Render("Last 7 days") + "\n")
 	today := truncateDay(time.Now())
-	dayAbbrDE := [7]string{"So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"}
+	dayAbbrDE := [7]string{"Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"}
 	var dayRow, dotRow strings.Builder
 	for i := 0; i < 7; i++ {
 		d := today.AddDate(0, 0, i-6)
@@ -2885,16 +2895,16 @@ func (m model) renderHabitDetail() string {
 	lbl := styleMuted
 	if habit.FreqTarget > 0 {
 		b.WriteString(ind + num.Render(fmt.Sprintf("%d/%d", h.WeeklyDone, habit.FreqTarget)) +
-			" " + lbl.Render("diese Woche") +
-			"   " + num.Render(fmt.Sprintf("%d", h.Streak)) + " " + lbl.Render("Wochen-Streak") + "\n")
-		b.WriteString(ind + lbl.Render(fmt.Sprintf("📅 %d× pro Woche", habit.FreqTarget)) + "\n")
+			" " + lbl.Render("this week") +
+			"   " + num.Render(fmt.Sprintf("%d", h.Streak)) + " " + lbl.Render("week streak") + "\n")
+		b.WriteString(ind + lbl.Render(fmt.Sprintf("📅 %d× per week", habit.FreqTarget)) + "\n")
 	} else {
-		b.WriteString(ind + num.Render(fmt.Sprintf("%d", h.Streak)) + " " + lbl.Render("Streak") +
-			"   " + num.Render(fmt.Sprintf("%d", h.LongestStreak)) + " " + lbl.Render("Längster") +
-			"   " + num.Render(fmt.Sprintf("%d", h.TotalDays)) + " " + lbl.Render("Tage/30") + "\n")
+		b.WriteString(ind + num.Render(fmt.Sprintf("%d", h.Streak)) + " " + lbl.Render("streak") +
+			"   " + num.Render(fmt.Sprintf("%d", h.LongestStreak)) + " " + lbl.Render("longest") +
+			"   " + num.Render(fmt.Sprintf("%d", h.TotalDays)) + " " + lbl.Render("days/30") + "\n")
 	}
 	if habit.SkipAllowed > 0 {
-		b.WriteString(ind + lbl.Render(fmt.Sprintf("⏭ %d Skip%s erlaubt", habit.SkipAllowed, func() string {
+		b.WriteString(ind + lbl.Render(fmt.Sprintf("⏭ %d skip%s allowed", habit.SkipAllowed, func() string {
 			if habit.SkipAllowed == 1 {
 				return ""
 			}
@@ -2905,15 +2915,15 @@ func (m model) renderHabitDetail() string {
 	// ── chain ─────────────────────────────────────────────────────────────────
 	if h.ChainTo != "" {
 		b.WriteString("\n")
-		b.WriteString(ind + styleMuted.Render("Danach  →  ") + styleFg.Render(h.ChainTo) + "\n")
+		b.WriteString(ind + styleMuted.Render("Next  →  ") + styleFg.Render(h.ChainTo) + "\n")
 	}
 
 	// ── footer ────────────────────────────────────────────────────────────────
 	b.WriteString("\n")
 	if h.CheckedToday {
-		b.WriteString(styleMuted.Render("space ✓ · N notiz · e bearbeiten · esc zurück"))
+		b.WriteString(styleMuted.Render("space ✓ · N note · e edit · esc back"))
 	} else {
-		b.WriteString(styleMuted.Render("space check in · e bearbeiten · esc zurück"))
+		b.WriteString(styleMuted.Render("space check in · e edit · esc back"))
 	}
 	return m.panel(b.String())
 }
@@ -2926,9 +2936,9 @@ func (m model) renderReview() string {
 	if info, err := ai.Detect(); err == nil {
 		providerLabel = styleMuted.Render("via " + info.Display)
 	} else {
-		providerLabel = styleWarn.Render("kein Provider — S für Settings")
+		providerLabel = styleWarn.Render("no provider — S for settings")
 	}
-	b.WriteString(styleLime.Bold(true).Render("Wochenreview") + "  " + providerLabel + "\n\n")
+	b.WriteString(styleLime.Bold(true).Render("Weekly Review") + "  " + providerLabel + "\n\n")
 
 	blinkCursor := "▌"
 	if m.blinkOn {
@@ -2946,11 +2956,11 @@ func (m model) renderReview() string {
 			b.WriteString(styleLime.Render(blinkCursor))
 		}
 	} else if !m.reviewDone {
-		b.WriteString(styleMuted.Render("Analysiere letzte Woche…") + "\n\n")
+		b.WriteString(styleMuted.Render("Analysing last week…") + "\n\n")
 		b.WriteString(styleLime.Render(blinkCursor))
 	}
 
-	b.WriteString("\n\n" + styleMuted.Render("esc zurück · r nochmal"))
+	b.WriteString("\n\n" + styleMuted.Render("esc back · r again"))
 	return m.panel(b.String())
 }
 
@@ -2958,9 +2968,9 @@ func (m model) renderReview() string {
 
 func (m model) renderNoteInput() string {
 	var b strings.Builder
-	b.WriteString(styleLime.Bold(true).Render("Notiz") + styleMuted.Render(" für "+m.noteForHabit) + "\n\n")
+	b.WriteString(styleLime.Bold(true).Render("Note") + styleMuted.Render(" for "+m.noteForHabit) + "\n\n")
 	b.WriteString("  " + m.input.View() + "\n\n")
-	b.WriteString(styleMuted.Render("enter speichern · esc abbrechen"))
+	b.WriteString(styleMuted.Render("enter save · esc cancel"))
 	return m.panel(b.String())
 }
 
@@ -2968,11 +2978,11 @@ func (m model) renderNoteInput() string {
 
 func (m model) renderArchive() string {
 	var b strings.Builder
-	b.WriteString(styleLime.Bold(true).Render("Archiv") + "\n")
-	b.WriteString(styleMuted.Render("Archivierte Habits — History bleibt erhalten.") + "\n\n")
+	b.WriteString(styleLime.Bold(true).Render("Archive") + "\n")
+	b.WriteString(styleMuted.Render("Archived habits — history is preserved.") + "\n\n")
 
 	if len(m.archivedHabits) == 0 {
-		b.WriteString(styleMuted.Render("Kein Archiv. a in der Liste archiviert Habits.") + "\n\n")
+		b.WriteString(styleMuted.Render("Archive is empty. a in the list to archive habits.") + "\n\n")
 	} else {
 		for i, h := range m.archivedHabits {
 			cursor := "  "
@@ -3001,7 +3011,7 @@ func (m model) renderArchive() string {
 		b.WriteString(msgStyle.Render(m.message) + "\n\n")
 	}
 
-	b.WriteString(styleMuted.Render("r wiederherstellen · d endgültig löschen · j/k navigieren · esc zurück"))
+	b.WriteString(styleMuted.Render("r restore · d delete permanently · j/k navigate · esc back"))
 	return m.panel(b.String())
 }
 
@@ -3009,11 +3019,11 @@ func (m model) renderArchive() string {
 
 func (m model) renderGoalInput() string {
 	var b strings.Builder
-	b.WriteString(styleLime.Bold(true).Render("Ziel → 3 verknüpfte Habits") + "\n\n")
-	b.WriteString(styleMuted.Render("Die KI schlägt 3 Habits vor die sich gegenseitig stärken.") + "\n")
-	b.WriteString(styleMuted.Render("Beispiele: mehr Energie morgens · besser schlafen · produktiver") + "\n\n")
+	b.WriteString(styleLime.Bold(true).Render("Goal → 3 linked Habits") + "\n\n")
+	b.WriteString(styleMuted.Render("AI suggests 3 habits that reinforce each other.") + "\n")
+	b.WriteString(styleMuted.Render("Examples: more morning energy · better sleep · more productive") + "\n\n")
 	b.WriteString(m.input.View() + "\n\n")
-	b.WriteString(styleMuted.Render("enter senden · esc zurück"))
+	b.WriteString(styleMuted.Render("enter send · esc back"))
 	return m.panel(b.String())
 }
 
@@ -3021,11 +3031,11 @@ func (m model) renderGoalInput() string {
 
 func (m model) renderChainMgr() string {
 	var b strings.Builder
-	b.WriteString(styleLime.Bold(true).Render("Habit-Ketten") + "\n")
-	b.WriteString(styleMuted.Render("Nach Habit A kommt direkt Habit B.") + "\n\n")
+	b.WriteString(styleLime.Bold(true).Render("Habit Chains") + "\n")
+	b.WriteString(styleMuted.Render("After habit A, do habit B next.") + "\n\n")
 
 	if len(m.chains) == 0 {
-		b.WriteString(styleMuted.Render("Noch keine Ketten. a anlegen, s KI-Vorschläge.") + "\n")
+		b.WriteString(styleMuted.Render("No chains yet. a to add, s for AI suggestions.") + "\n")
 	} else {
 		for i, ch := range m.chains {
 			cursor := "  "
@@ -3038,7 +3048,7 @@ func (m model) renderChainMgr() string {
 		}
 	}
 
-	b.WriteString("\n" + styleMuted.Render("a anlegen · d löschen · s KI-Vorschläge · esc zurück"))
+	b.WriteString("\n" + styleMuted.Render("a add · d delete · s AI suggestions · esc back"))
 	return m.panel(b.String())
 }
 
@@ -3047,11 +3057,11 @@ func (m model) renderChainMgr() string {
 func (m model) renderChainPick() string {
 	var b strings.Builder
 	if m.chainFromName == "" {
-		b.WriteString(styleLime.Bold(true).Render("Kette anlegen") + "\n")
-		b.WriteString(styleMuted.Render("Schritt 1: Welcher Habit kommt zuerst?") + "\n\n")
+		b.WriteString(styleLime.Bold(true).Render("Create Chain") + "\n")
+		b.WriteString(styleMuted.Render("Step 1: Which habit comes first?") + "\n\n")
 	} else {
-		b.WriteString(styleLime.Bold(true).Render("Kette anlegen") + "\n")
-		b.WriteString(styleMuted.Render("Schritt 2: Welcher Habit folgt auf ") +
+		b.WriteString(styleLime.Bold(true).Render("Create Chain") + "\n")
+		b.WriteString(styleMuted.Render("Step 2: Which habit follows ") +
 			styleLime.Render(m.chainFromName) + styleMuted.Render("?") + "\n\n")
 	}
 
@@ -3072,7 +3082,7 @@ func (m model) renderChainPick() string {
 		b.WriteString(cursor + style.Render(name) + "\n")
 	}
 
-	b.WriteString("\n" + styleMuted.Render("enter auswählen · esc zurück"))
+	b.WriteString("\n" + styleMuted.Render("enter select · esc back"))
 	return m.panel(b.String())
 }
 
@@ -3274,7 +3284,7 @@ func splitIcon(input string) (icon, name string) {
 }
 
 // parseSuggestions parses the ### block format produced by the AI.
-// Each block is delimited by "###" and contains Name:, Zeit:, Nutzen:, Tipp: fields.
+// Each block is delimited by "###" and contains Name:, Time:, Benefit:, Tip: fields.
 func parseSuggestions(text string) []suggestItem {
 	var items []suggestItem
 	for _, block := range strings.Split(text, "###") {
@@ -3282,40 +3292,40 @@ func parseSuggestions(text string) []suggestItem {
 		if block == "" {
 			continue
 		}
-		var name, zeit, nutzen, tipp string
+		var name, timeStr, benefit, tip string
 		for _, raw := range strings.Split(block, "\n") {
 			line := strings.TrimSpace(raw)
 			switch {
 			case strings.HasPrefix(line, "Name:"):
 				name = strings.TrimSpace(strings.TrimPrefix(line, "Name:"))
-			case strings.HasPrefix(line, "Zeit:"):
-				zeit = strings.TrimSpace(strings.TrimPrefix(line, "Zeit:"))
-			case strings.HasPrefix(line, "Nutzen:"):
-				nutzen = strings.TrimSpace(strings.TrimPrefix(line, "Nutzen:"))
-			case strings.HasPrefix(line, "Tipp:"):
-				tipp = strings.TrimSpace(strings.TrimPrefix(line, "Tipp:"))
+			case strings.HasPrefix(line, "Time:"):
+				timeStr = strings.TrimSpace(strings.TrimPrefix(line, "Time:"))
+			case strings.HasPrefix(line, "Benefit:"):
+				benefit = strings.TrimSpace(strings.TrimPrefix(line, "Benefit:"))
+			case strings.HasPrefix(line, "Tip:"):
+				tip = strings.TrimSpace(strings.TrimPrefix(line, "Tip:"))
 			}
 		}
 		if name == "" {
 			continue
 		}
 		header := name
-		if zeit != "" {
-			header = name + "  ·  " + zeit
+		if timeStr != "" {
+			header = name + "  ·  " + timeStr
 		}
 		var details []string
-		if nutzen != "" {
-			details = append(details, nutzen)
+		if benefit != "" {
+			details = append(details, benefit)
 		}
-		if tipp != "" {
-			details = append(details, "Tipp: "+tipp)
+		if tip != "" {
+			details = append(details, "Tip: "+tip)
 		}
 		items = append(items, suggestItem{name: name, header: header, details: details})
 	}
 	return items
 }
 
-// parseChainSuggestions parses the Von:/Zu:/Warum: block format from SuggestChains.
+// parseChainSuggestions parses the From:/To:/Why: block format from SuggestChains.
 func parseChainSuggestions(text string) []chainSuggestItem {
 	var items []chainSuggestItem
 	for _, block := range strings.Split(text, "###") {
@@ -3323,22 +3333,22 @@ func parseChainSuggestions(text string) []chainSuggestItem {
 		if block == "" {
 			continue
 		}
-		var von, zu, warum string
+		var from, to, why string
 		for _, raw := range strings.Split(block, "\n") {
 			line := strings.TrimSpace(raw)
 			switch {
-			case strings.HasPrefix(line, "Von:"):
-				von = strings.TrimSpace(strings.TrimPrefix(line, "Von:"))
-			case strings.HasPrefix(line, "Zu:"):
-				zu = strings.TrimSpace(strings.TrimPrefix(line, "Zu:"))
-			case strings.HasPrefix(line, "Warum:"):
-				warum = strings.TrimSpace(strings.TrimPrefix(line, "Warum:"))
+			case strings.HasPrefix(line, "From:"):
+				from = strings.TrimSpace(strings.TrimPrefix(line, "From:"))
+			case strings.HasPrefix(line, "To:"):
+				to = strings.TrimSpace(strings.TrimPrefix(line, "To:"))
+			case strings.HasPrefix(line, "Why:"):
+				why = strings.TrimSpace(strings.TrimPrefix(line, "Why:"))
 			}
 		}
-		if von == "" || zu == "" {
+		if from == "" || to == "" {
 			continue
 		}
-		items = append(items, chainSuggestItem{from: von, to: zu, reason: warum})
+		items = append(items, chainSuggestItem{from: from, to: to, reason: why})
 	}
 	return items
 }

@@ -13,11 +13,11 @@ import (
 
 var reviewCmd = &cobra.Command{
 	Use:   "review",
-	Short: "KI-Wochenreview — Coaching-Briefing der letzten 7 Tage",
-	Long: `Analysiert deine letzten 7 Tage und erstellt ein persönliches Coaching-Briefing.
+	Short: "AI weekly review — coaching briefing for the last 7 days",
+	Long: `Analyses your last 7 days and generates a personal coaching briefing.
 
-Zeigt: Überblick, Top-Habits, Kämpfe, Empfehlung, Tipp der Woche.
-Im TUI: r Taste.`,
+Shows: overview, top habits, struggles, recommendation, tip of the week.
+In TUI: press r.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		s, err := openStore()
 		if err != nil {
@@ -27,10 +27,10 @@ Im TUI: r Taste.`,
 
 		data, err := s.GetWeeklyReview()
 		if err != nil {
-			return fmt.Errorf("Daten laden: %w", err)
+			return fmt.Errorf("load data: %w", err)
 		}
 		if len(data.Habits) == 0 {
-			fmt.Fprintln(os.Stderr, "Noch keine Habits. habctl add \"<Name>\" zum Starten.")
+			fmt.Fprintln(os.Stderr, "No habits yet. Use habctl add \"<name>\" to get started.")
 			return nil
 		}
 
@@ -42,7 +42,7 @@ Im TUI: r Taste.`,
 		if detErr == nil {
 			providerLabel = muted.Render("via " + info.Display)
 		} else {
-			return fmt.Errorf("kein KI-Provider konfiguriert — %w", detErr)
+			return fmt.Errorf("no AI provider configured — %w", detErr)
 		}
 
 		fmt.Println()
@@ -50,7 +50,6 @@ Im TUI: r Taste.`,
 		fmt.Println()
 
 		_, err = ai.Review(context.Background(), data, func(chunk string) {
-			// Render section headers in lime, rest muted
 			if strings.HasPrefix(chunk, "## ") {
 				fmt.Print(lime.Render(strings.TrimPrefix(chunk, "## ")))
 			} else {
@@ -59,7 +58,7 @@ Im TUI: r Taste.`,
 			os.Stdout.Sync()
 		})
 		if err != nil {
-			return fmt.Errorf("Review fehlgeschlagen: %w", err)
+			return fmt.Errorf("review failed: %w", err)
 		}
 
 		fmt.Println()

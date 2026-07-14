@@ -46,14 +46,14 @@ Examples:
 		lime := lipgloss.NewStyle().Foreground(lipgloss.Color("#84cc16")).Bold(true)
 		muted := lipgloss.NewStyle().Foreground(lipgloss.Color("#718096"))
 
-		label := "Habit-Vorschläge"
+		label := "Habit Suggestions"
 		if suggestRoutine != "" {
 			routineLabels := map[string]string{
-				"morning":      "Morgenroutine",
-				"evening":      "Abendroutine",
-				"health":       "Gesundheit",
-				"learning":     "Lernen & Entwicklung",
-				"productivity": "Produktivität",
+				"morning":      "Morning Routine",
+				"evening":      "Evening Routine",
+				"health":       "Health",
+				"learning":     "Learning & Growth",
+				"productivity": "Productivity",
 			}
 			if l, ok := routineLabels[suggestRoutine]; ok {
 				label = l
@@ -83,12 +83,12 @@ Examples:
 			os.Stdout.Sync()
 		})
 		if err != nil {
-			return fmt.Errorf("Vorschläge konnten nicht generiert werden: %w", err)
+			return fmt.Errorf("could not generate suggestions: %w", err)
 		}
 
 		fmt.Println()
 		fmt.Println()
-		fmt.Println(muted.Render("Hinzufügen mit: habctl add \"<Name>\""))
+		fmt.Println(muted.Render("Add with: habctl add \"<name>\""))
 		fmt.Println()
 		return nil
 	},
@@ -96,11 +96,11 @@ Examples:
 
 func init() {
 	suggestCmd.Flags().StringVar(&suggestRoutine, "routine", "",
-		"Kategorie: morning, evening, health, learning, productivity")
+		"Category: morning, evening, health, learning, productivity")
 	suggestCmd.Flags().StringVar(&suggestGoal, "goal", "",
-		"Dein Ziel (Freitext, z.B. \"mehr Energie am Morgen\")")
+		"Your goal in your own words, e.g. \"more energy in the morning\"")
 	suggestCmd.Flags().IntVar(&suggestCount, "count", 6,
-		"Anzahl der Vorschläge")
+		"Number of suggestions")
 	suggestCmd.Flags().StringVar(&suggestProvider, "provider", "",
-		"KI-Anbieter: anthropic, openai, gemini, ollama (Standard: auto-detect)")
+		"AI provider: anthropic, openai, gemini, ollama (default: auto-detect)")
 }

@@ -9,79 +9,79 @@ import (
 	"github.com/aeon022/habctl/internal/models"
 )
 
-const systemPromptSuggest = `Du bist ein Habit-Coach. Antworte auf Deutsch.
+const systemPromptSuggest = `You are a habit coach. Reply in English.
 
-Gib die Habit-Vorschläge in EXAKT diesem Format aus — kein Text davor, kein Text danach.
-Jeder Habit-Block beginnt und endet mit der Zeile "###".
-
-###
-Name: [Emoji] [Habit-Name]
-Zeit: [X Min/Tag]
-Nutzen: [1-2 Sätze konkreter Nutzen]
-Tipp: [ein praktischer Einstiegstipp]
-###
-
-Die App parst dieses Format maschinell. Abweichungen brechen das Parsing.
-Regeln: Emoji direkt vor dem Namen · Zeitaufwand realistisch · keine Überschneidungen mit bestehenden Habits`
-
-const systemPromptReview = `Du bist ein persönlicher Habit-Coach. Antworte auf Deutsch. Sei direkt, konkret und ermutigend.
-
-Analysiere die Habit-Daten der letzten Woche und schreibe ein kurzes Coaching-Briefing.
-Struktur (nutze exakt diese Abschnitte):
-
-## Wochenüberblick
-1-2 Sätze: Was lief gut, wie war die Gesamtkompletionsrate.
-
-## Top-Habits dieser Woche
-Max. 2 Habits die herausragten (hohe Completion oder langer Streak).
-
-## Kämpft gerade
-Max. 2 Habits mit niedriger Completion (<50%). Sei ehrlich aber nicht entmutigend.
-
-## Empfehlung
-Eine konkrete, umsetzbare Empfehlung für die nächste Woche. Falls ein Habit <40% hat: schlage vor, die Frequenz zu reduzieren (z.B. von täglich auf 4x/Woche). Falls Habits thematisch zusammenpassen, erwähne eine mögliche Habit-Kette ("nach X → Y").
-
-## Tipp der Woche
-Ein kurzer, prägnanter Habit-Coaching-Tipp (1-2 Sätze).
-
-Keine Einleitung, keine Schlussworte außer dem Briefing selbst. Kein Markdown-Fettdruck in den Abschnittsnamen selbst.`
-
-const systemPromptDecompose = `Du bist ein Habit-Coach. Antworte auf Deutsch.
-
-Der Nutzer nennt ein Ziel. Schlage genau 3 miteinander verknüpfte Gewohnheiten vor, die sich gegenseitig stärken.
-
-Ausgabeformat — kein Text davor/danach:
+Output habit suggestions in EXACTLY this format — no text before, no text after.
+Each habit block starts and ends with the line "###".
 
 ###
-Name: [Emoji] [Habit-Name]
-Zeit: [X Min/Tag]
-Nutzen: [wie dieser Habit das Ziel konkret unterstützt]
-Tipp: [wie er die anderen beiden Habits verstärkt oder von ihnen profitiert]
+Name: [Emoji] [Habit name]
+Time: [X min/day]
+Benefit: [1-2 sentences of concrete benefit]
+Tip: [one practical getting-started tip]
 ###
 
-Regeln: Genau 3 Habits · gegenseitig verstärkend (zeitlich/thematisch) · Emoji direkt vor Name · 3–15 Min/Tag · keine Duplikate bestehender Habits`
+The app parses this format programmatically. Deviations break parsing.
+Rules: Emoji directly before the name · realistic time estimate · no overlap with existing habits`
 
-const systemPromptChains = `Du bist ein Habit-Coach. Antworte auf Deutsch.
+const systemPromptReview = `You are a personal habit coach. Reply in English. Be direct, concrete and encouraging.
 
-Analysiere die gegebenen Habits und schlage sinnvolle Habit-Ketten vor.
-Eine Habit-Kette bedeutet: Wenn jemand Habit A erledigt, soll er direkt danach Habit B machen.
+Analyse the habit data from the last week and write a short coaching briefing.
+Structure (use exactly these sections):
 
-Gib die Vorschläge in EXAKT diesem Format — kein Text davor oder danach:
+## Weekly Overview
+1-2 sentences: what went well, what was the overall completion rate.
+
+## Top Habits This Week
+Max. 2 habits that stood out (high completion or long streak).
+
+## Struggling Right Now
+Max. 2 habits with low completion (<50%). Be honest but not discouraging.
+
+## Recommendation
+One concrete, actionable recommendation for next week. If a habit is <40%: suggest reducing frequency (e.g. from daily to 4×/week). If habits are thematically related, mention a possible habit chain ("after X → Y").
+
+## Tip of the Week
+One short, punchy habit coaching tip (1-2 sentences).
+
+No intro, no closing remarks beyond the briefing itself. No markdown bold on the section names themselves.`
+
+const systemPromptDecompose = `You are a habit coach. Reply in English.
+
+The user names a goal. Suggest exactly 3 interconnected habits that mutually reinforce each other.
+
+Output format — no text before or after:
 
 ###
-Von: [Habit-Name]
-Zu: [Habit-Name]
-Warum: [1 Satz Begründung warum diese Sequenz Sinn ergibt]
+Name: [Emoji] [Habit name]
+Time: [X min/day]
+Benefit: [how this habit concretely supports the goal]
+Tip: [how it reinforces the other two habits or benefits from them]
 ###
 
-Regeln:
-- Nur Habits aus der gegebenen Liste verwenden (exakte Namen)
-- Natürliche Sequenzen bevorzugen (zeitlich, thematisch, energetisch)
-- Max. 3 Vorschläge
-- Keine Ketten vorschlagen wenn die Habits keine sinnvolle Verbindung haben`
+Rules: Exactly 3 habits · mutually reinforcing (timing/theme) · Emoji directly before name · 3–15 min/day · no duplicates of existing habits`
+
+const systemPromptChains = `You are a habit coach. Reply in English.
+
+Analyse the given habits and suggest sensible habit chains.
+A habit chain means: when someone completes habit A, they should do habit B directly after.
+
+Output suggestions in EXACTLY this format — no text before or after:
+
+###
+From: [Habit name]
+To: [Habit name]
+Why: [1 sentence explaining why this sequence makes sense]
+###
+
+Rules:
+- Only use habits from the given list (exact names)
+- Prefer natural sequences (temporal, thematic, energetic)
+- Max. 3 suggestions
+- Do not suggest chains when habits have no sensible connection`
 
 // ErrNoAPIKey is returned when no provider key is configured.
-var ErrNoAPIKey = fmt.Errorf("kein API-Key gefunden — setze ANTHROPIC_API_KEY, OPENAI_API_KEY oder GEMINI_API_KEY")
+var ErrNoAPIKey = fmt.Errorf("no API key found — set ANTHROPIC_API_KEY, OPENAI_API_KEY or GEMINI_API_KEY")
 
 // SuggestRequest is the input for habit suggestions.
 type SuggestRequest struct {
@@ -152,13 +152,13 @@ func DecomposeGoal(ctx context.Context, goal string, existing []string, out func
 	}
 	var b strings.Builder
 	if len(existing) > 0 {
-		b.WriteString("Meine bestehenden Habits (keine Duplikate):\n")
+		b.WriteString("My existing habits (no duplicates):\n")
 		for _, h := range existing {
 			b.WriteString("- " + h + "\n")
 		}
 		b.WriteString("\n")
 	}
-	b.WriteString("Mein Ziel: " + goal + "\n")
+	b.WriteString("My goal: " + goal + "\n")
 	return Call(ctx, info, systemPromptDecompose, b.String(), out)
 }
 
@@ -169,10 +169,10 @@ func SuggestChains(ctx context.Context, habits []string, out func(string)) (stri
 		return "", err
 	}
 	if len(habits) < 2 {
-		return "", fmt.Errorf("mindestens 2 Habits für Ketten-Vorschläge nötig")
+		return "", fmt.Errorf("at least 2 habits required for chain suggestions")
 	}
 	var b strings.Builder
-	b.WriteString("Meine Habits:\n")
+	b.WriteString("My habits:\n")
 	for _, h := range habits {
 		b.WriteString("- " + h + "\n")
 	}
@@ -195,7 +195,7 @@ func detectForced(p Provider) (ProviderInfo, error) {
 		model := "llama3.2"
 		return ProviderInfo{ProviderOllama, model, "Ollama (" + model + ", local)"}, nil
 	}
-	return ProviderInfo{}, fmt.Errorf("unbekannter Provider %q", p)
+	return ProviderInfo{}, fmt.Errorf("unknown provider %q", p)
 }
 
 func buildPrompt(req SuggestRequest) string {
@@ -206,37 +206,37 @@ func buildPrompt(req SuggestRequest) string {
 	var b strings.Builder
 
 	if len(req.ExistingHabits) > 0 {
-		b.WriteString("Meine bestehenden Habits:\n")
+		b.WriteString("My existing habits:\n")
 		for _, h := range req.ExistingHabits {
 			rate, hasRate := req.CompletionRates[h]
 			line := "- " + h
 			if hasRate {
-				line += fmt.Sprintf(" (%.0f%% letzte Woche)", rate*100)
+				line += fmt.Sprintf(" (%.0f%% last week)", rate*100)
 			}
 			b.WriteString(line + "\n")
 		}
-		b.WriteString("Keine Überschneidungen mit diesen Habits.\n\n")
+		b.WriteString("No overlap with these habits.\n\n")
 	}
 
-	b.WriteString(fmt.Sprintf("Schlage mir genau %d Habits vor", req.Count))
+	b.WriteString(fmt.Sprintf("Suggest exactly %d habits", req.Count))
 	switch req.Routine {
 	case "morning":
-		b.WriteString(" für eine Morgenroutine (Energie, Klarheit, guter Start)")
+		b.WriteString(" for a morning routine (energy, clarity, good start)")
 	case "evening":
-		b.WriteString(" für eine Abendroutine (Runterfahren, guter Schlaf)")
+		b.WriteString(" for an evening routine (wind down, good sleep)")
 	case "health":
-		b.WriteString(" für Gesundheit (Bewegung, Ernährung, Schlaf, Mental Health)")
+		b.WriteString(" for health (movement, nutrition, sleep, mental health)")
 	case "learning":
-		b.WriteString(" zum Lernen (Lesen, Schreiben, Sprachen, neue Skills)")
+		b.WriteString(" for learning (reading, writing, languages, new skills)")
 	case "productivity":
-		b.WriteString(" für Produktivität (Fokus, Deep Work, Wissensarbeiter)")
+		b.WriteString(" for productivity (focus, deep work, knowledge workers)")
 	default:
-		b.WriteString(" — Mix aus Gesundheit, Lernen, Produktivität, Mindfulness")
+		b.WriteString(" — mix of health, learning, productivity, mindfulness")
 	}
 	b.WriteString(".\n")
 
 	if req.Goal != "" {
-		b.WriteString(fmt.Sprintf("Mein Ziel: %s\n", req.Goal))
+		b.WriteString(fmt.Sprintf("My goal: %s\n", req.Goal))
 	}
 
 	return b.String()
@@ -244,13 +244,13 @@ func buildPrompt(req SuggestRequest) string {
 
 func buildReviewPrompt(data models.WeeklyReview) string {
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("Habits analysiert: %d\n", len(data.Habits)))
-	b.WriteString(fmt.Sprintf("Perfekte Tage diese Woche: %d/7\n", data.PerfectDays))
+	b.WriteString(fmt.Sprintf("Habits analysed: %d\n", len(data.Habits)))
+	b.WriteString(fmt.Sprintf("Perfect days this week: %d/7\n", data.PerfectDays))
 	if data.WeakestDay != "" {
-		b.WriteString(fmt.Sprintf("Schwächster Wochentag (30 Tage): %s\n", data.WeakestDay))
+		b.WriteString(fmt.Sprintf("Weakest weekday (30 days): %s\n", data.WeakestDay))
 	}
 	if data.StrongestDay != "" {
-		b.WriteString(fmt.Sprintf("Stärkster Wochentag (30 Tage): %s\n", data.StrongestDay))
+		b.WriteString(fmt.Sprintf("Strongest weekday (30 days): %s\n", data.StrongestDay))
 	}
 	b.WriteString("\n")
 
@@ -260,11 +260,11 @@ func buildReviewPrompt(data models.WeeklyReview) string {
 			name = h.Icon + " " + name
 		}
 		b.WriteString(fmt.Sprintf("### %s\n", name))
-		b.WriteString(fmt.Sprintf("- Letzte 7 Tage: %d/7 (%.0f%%)\n", h.DoneThisWeek, h.CompletionPct7*100))
-		b.WriteString(fmt.Sprintf("- Letzte 30 Tage: %d/30 (%.0f%%)\n", h.DoneLast30, h.CompletionPct30*100))
-		b.WriteString(fmt.Sprintf("- Aktueller Streak: %d Tage\n", h.CurrentStreak))
+		b.WriteString(fmt.Sprintf("- Last 7 days: %d/7 (%.0f%%)\n", h.DoneThisWeek, h.CompletionPct7*100))
+		b.WriteString(fmt.Sprintf("- Last 30 days: %d/30 (%.0f%%)\n", h.DoneLast30, h.CompletionPct30*100))
+		b.WriteString(fmt.Sprintf("- Current streak: %d days\n", h.CurrentStreak))
 		if len(h.RecentNotes) > 0 {
-			b.WriteString("- Notizen:\n")
+			b.WriteString("- Notes:\n")
 			for _, n := range h.RecentNotes {
 				b.WriteString(fmt.Sprintf("  [%s] %s\n", n.Date, n.Note))
 			}
