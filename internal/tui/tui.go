@@ -67,18 +67,18 @@ var providers = []providerEntry{
 type viewState int
 
 const (
-	viewList viewState = iota
-	viewAddInput      // step 1: habit name (+ optional emoji prefix)
-	viewAddDesc       // step 2: description (optional)
+	viewList     viewState = iota
+	viewAddInput           // step 1: habit name (+ optional emoji prefix)
+	viewAddDesc            // step 2: description (optional)
 	viewHelp
 	viewSuggest
 	viewSettings
 	viewKeyInput
 	viewStats
-	viewEditHabit  // edit name/icon/description of selected habit
-	viewGroupMgr   // manage groups list
-	viewGroupNew   // create new group (name + icon)
-	viewGroupPick  // assign a habit to a group
+	viewEditHabit   // edit name/icon/description of selected habit
+	viewGroupMgr    // manage groups list
+	viewGroupNew    // create new group (name + icon)
+	viewGroupPick   // assign a habit to a group
 	viewHabitDetail // full habit detail / expand view
 	viewReview      // weekly AI coaching briefing
 	viewNoteInput   // add/edit note for today's check-in
@@ -88,8 +88,10 @@ const (
 	viewGeminiCID
 	viewGeminiCS
 	viewOAuthWait
-	viewArchive   // archived habits list
-	viewGoalInput // goal → 3 decomposed habits
+	viewArchive     // archived habits list
+	viewGoalInput   // goal → 3 decomposed habits
+	viewConfirm     // confirmation prompt before a destructive action
+	viewFilterInput // "/" filter over the habit list
 )
 
 // ── messages ─────────────────────────────────────────────────────────────────
@@ -203,9 +205,18 @@ type model struct {
 	// group management
 	groupCursor int
 
+	// "/" filter over the habit list
+	allHabits []models.HabitStats
+	filterQ   string
+
+	// confirm-before-delete
+	confirmPrompt string
+	confirmAction tea.Cmd
+	confirmReturn viewState
+
 	// chain management
-	chainCursor     int // cursor in viewChainMgr
-	chainPickCursor int // cursor in viewChainPick
+	chainCursor     int    // cursor in viewChainMgr
+	chainPickCursor int    // cursor in viewChainPick
 	chainFromName   string // habit name selected as chain source
 
 	// note flow: add note to today's check-in
@@ -275,7 +286,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return !stats[i].CheckedToday && stats[j].CheckedToday
 		})
-		m.habits = stats
+		m.allHabits = stats
+		m.habits = filterHabits(stats, m.filterQ)
 		if m.cursor >= len(m.habits) {
 			m.cursor = max(0, len(m.habits)-1)
 		}
@@ -435,6 +447,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleArchive(msg)
 		case viewGoalInput:
 			return m.handleGoalInput(msg)
+		case viewConfirm:
+			return m.handleConfirm(msg)
+		case viewFilterInput:
+			return m.handleFilterInput(msg)
 		case viewOAuthWait:
 			if msg.String() == "ctrl+c" {
 				return m, tea.Quit
@@ -448,7 +464,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.state == viewKeyInput || m.state == viewEditHabit ||
 		m.state == viewGeminiCID || m.state == viewGeminiCS ||
 		m.state == viewGroupNew || m.state == viewNoteInput ||
-		m.state == viewGoalInput {
+		m.state == viewGoalInput || m.state == viewFilterInput {
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)
 		return m, cmd
@@ -462,6 +478,21 @@ func (m model) handleList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "q", "ctrl+c":
 		return m, tea.Quit
+
+	case "/":
+		m.state = viewFilterInput
+		m.input.Placeholder = "filter habits…"
+		m.input.SetValue(m.filterQ)
+		m.input.CursorEnd()
+		m.input.Focus()
+		return m, nil
+
+	case "esc":
+		if m.filterQ != "" {
+			m.filterQ = ""
+			m.habits = filterHabits(m.allHabits, "")
+			m.cursor = 0
+		}
 
 	case "j", "down":
 		if m.cursor < len(m.habits)-1 {
@@ -755,12 +786,14 @@ func (m model) handleList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		name := m.habits[m.cursor].Habit.Name
 		s := m.s
-		return m, func() tea.Msg {
-			if err := s.DeleteHabit(name); err != nil {
-				return errMsg{err}
-			}
-			return statusMsg("Deleted: " + name)
-		}
+		return m.askConfirm(
+			"Delete habit "+styleWarn.Render(name)+" and all its check-ins permanently?",
+			func() tea.Msg {
+				if err := s.DeleteHabit(name); err != nil {
+					return errMsg{err}
+				}
+				return statusMsg("Deleted: " + name)
+			})
 
 	case "S":
 		cfg, _ := config.Load()
@@ -938,12 +971,14 @@ func (m model) handleGroupMgr(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		g := m.groups[m.groupCursor]
 		s := m.s
-		return m, func() tea.Msg {
-			if err := s.DeleteGroup(g.ID); err != nil {
-				return errMsg{err}
-			}
-			return statusMsg("Group deleted: " + g.Name)
-		}
+		return m.askConfirm(
+			"Delete group "+styleWarn.Render(g.Name)+"? Habits in it are kept (ungrouped).",
+			func() tea.Msg {
+				if err := s.DeleteGroup(g.ID); err != nil {
+					return errMsg{err}
+				}
+				return statusMsg("Group deleted: " + g.Name)
+			})
 	}
 	return m, nil
 }
@@ -1168,12 +1203,14 @@ func (m model) handleChainMgr(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		ch := m.chains[m.chainCursor]
 		s := m.s
-		return m, func() tea.Msg {
-			if err := s.DeleteChain(ch.ID); err != nil {
-				return errMsg{err}
-			}
-			return statusMsg("Chain deleted")
-		}
+		return m.askConfirm(
+			"Delete this habit chain?",
+			func() tea.Msg {
+				if err := s.DeleteChain(ch.ID); err != nil {
+					return errMsg{err}
+				}
+				return statusMsg("Chain deleted")
+			})
 	case "s":
 		// AI chain suggestions
 		if m.suggestCancel != nil {
@@ -1268,6 +1305,82 @@ func (m model) handleChainPick(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// handleFilterInput drives the "/" habit filter (filters live while typing).
+func (m model) handleFilterInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+	case "esc":
+		m.state = viewList
+		m.input.Blur()
+		m.filterQ = ""
+		m.habits = filterHabits(m.allHabits, "")
+		m.cursor = 0
+		return m, nil
+	case "enter":
+		m.state = viewList
+		m.input.Blur()
+		return m, nil
+	}
+	var cmd tea.Cmd
+	m.input, cmd = m.input.Update(msg)
+	m.filterQ = strings.TrimSpace(m.input.Value())
+	m.habits = filterHabits(m.allHabits, m.filterQ)
+	m.cursor = 0
+	return m, cmd
+}
+
+// filterHabits returns habits whose name or description contains q.
+func filterHabits(habits []models.HabitStats, q string) []models.HabitStats {
+	q = strings.ToLower(strings.TrimSpace(q))
+	if q == "" {
+		return habits
+	}
+	var out []models.HabitStats
+	for _, h := range habits {
+		if strings.Contains(strings.ToLower(h.Habit.Name), q) ||
+			strings.Contains(strings.ToLower(h.Habit.Description), q) {
+			out = append(out, h)
+		}
+	}
+	return out
+}
+
+// askConfirm switches to the confirmation prompt; action runs only on "y"/enter.
+func (m model) askConfirm(prompt string, action tea.Cmd) (tea.Model, tea.Cmd) {
+	m.confirmPrompt = prompt
+	m.confirmAction = action
+	m.confirmReturn = m.state
+	m.state = viewConfirm
+	return m, nil
+}
+
+func (m model) handleConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+	case "y", "Y", "enter":
+		action := m.confirmAction
+		m.state = m.confirmReturn
+		m.confirmPrompt = ""
+		m.confirmAction = nil
+		return m, action
+	default:
+		m.state = m.confirmReturn
+		m.confirmPrompt = ""
+		m.confirmAction = nil
+		return m, nil
+	}
+}
+
+func (m model) renderConfirm() string {
+	var b strings.Builder
+	b.WriteString(styleWarn.Render("Delete?") + "\n\n")
+	b.WriteString("  " + m.confirmPrompt + "\n\n")
+	b.WriteString(styleMuted.Render("  y / enter  confirm      esc / n  cancel"))
+	return m.panel(b.String())
+}
+
 func (m model) handleArchive(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
@@ -1300,12 +1413,14 @@ func (m model) handleArchive(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		name := m.archivedHabits[m.archiveCursor].Name
 		s := m.s
-		return m, func() tea.Msg {
-			if err := s.DeleteHabit(name); err != nil {
-				return errMsg{err}
-			}
-			return archiveReloadMsg{"Deleted: " + name}
-		}
+		return m.askConfirm(
+			"Delete archived habit "+styleWarn.Render(name)+" and its history permanently?",
+			func() tea.Msg {
+				if err := s.DeleteHabit(name); err != nil {
+					return errMsg{err}
+				}
+				return archiveReloadMsg{"Deleted: " + name}
+			})
 	}
 	return m, nil
 }
@@ -1754,6 +1869,10 @@ func (m model) View() string {
 		return m.renderArchive()
 	case viewGoalInput:
 		return m.renderGoalInput()
+	case viewConfirm:
+		return m.renderConfirm()
+	case viewFilterInput:
+		return m.renderList()
 	default:
 		return m.renderList()
 	}
@@ -1811,6 +1930,14 @@ func (m model) renderList() string {
 	today := truncateDay(time.Now())
 
 	innerW := m.innerWidth()
+
+	// active "/" filter: input line while typing, chip afterwards
+	filterLine := ""
+	if m.state == viewFilterInput {
+		filterLine = "  / " + m.input.View() + "\n"
+	} else if m.filterQ != "" {
+		filterLine = "  " + styleMuted.Render("filter: /"+m.filterQ+"  (esc clears)") + "\n"
+	}
 
 	// ── header ────────────────────────────────────────────────────────────────
 
@@ -1885,12 +2012,20 @@ func (m model) renderList() string {
 		statsLine.WriteString(bar + " " + ps.Render(fmt.Sprintf("%d/%d", done, total)) +
 			styleMuted.Render(fmt.Sprintf("  ·  %d habits", total)))
 	}
-	b.WriteString(statsLine.String() + "\n\n")
+	b.WriteString(statsLine.String() + "\n")
+	if filterLine != "" {
+		b.WriteString(filterLine)
+	}
+	b.WriteString("\n")
 
 	// ── habit list ────────────────────────────────────────────────────────────
 
 	if total == 0 {
-		b.WriteString(styleMuted.Render("No habits yet. n to add one.") + "\n")
+		if m.filterQ != "" || m.state == viewFilterInput {
+			b.WriteString(styleMuted.Render("No habits match the filter.") + "\n")
+		} else {
+			b.WriteString(styleMuted.Render("No habits yet. n to add one.") + "\n")
+		}
 	} else {
 		const cbW = 4   // "[✓] "
 		const dotsW = 9 // 7-day dots + trailing space
@@ -2068,7 +2203,6 @@ func (m model) renderList() string {
 	b.WriteString(footer)
 	return m.dynamicPanel(b.String(), borderColor)
 }
-
 
 // ── renderAddInput ────────────────────────────────────────────────────────────
 
@@ -2397,7 +2531,7 @@ func (m model) renderStats() string {
 			if level > 0 {
 				cell = "█"
 			}
-			row.WriteString(heat[level].Render(cell+" "))
+			row.WriteString(heat[level].Render(cell + " "))
 		}
 		b.WriteString(row.String() + "\n")
 	}
@@ -2760,6 +2894,7 @@ func (m model) renderHelp() string {
 	b.WriteString(section("Navigation"))
 	b.WriteString(row("j / ↓", "move down"))
 	b.WriteString(row("k / ↑", "move up"))
+	b.WriteString(row("/", "filter habits (esc clears)"))
 	b.WriteString(section("Habits"))
 	b.WriteString(row("space", "check in / undo check-in (toggle)"))
 	b.WriteString(row("enter", "open habit (detail, description, note history)"))
