@@ -560,7 +560,14 @@ func streakMilestone(n int) string {
 	return ""
 }
 
+// dbPathOverride, when non-empty, overrides the on-disk DB path. Used by tests to
+// point at a temporary database instead of the real one on disk.
+var dbPathOverride string
+
 func openStore() (*store.Store, error) {
+	if dbPathOverride != "" {
+		return store.Open(dbPathOverride)
+	}
 	path, err := store.DefaultPath()
 	if err != nil {
 		return nil, fmt.Errorf("resolve db path: %w", err)
