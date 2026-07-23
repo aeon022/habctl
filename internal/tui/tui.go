@@ -15,11 +15,11 @@ import (
 	"github.com/aeon022/habctl/internal/config"
 	"github.com/aeon022/habctl/internal/models"
 	"github.com/aeon022/habctl/internal/store"
+	"github.com/aeon022/missionctl-core/overlay"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/charmbracelet/x/ansi"
 	"github.com/sahilm/fuzzy"
 )
 
@@ -2027,7 +2027,7 @@ func (m model) View() string {
 	case viewHelp:
 		// "?" is only reachable from the main list (handleList), so the list
 		// is always the correct background to keep visible behind the popup.
-		return overlayCenter(m.renderList(), m.renderHelpPopup(), m.width, m.height, 1)
+		return overlay.Center(m.renderList(), m.renderHelpPopup(), m.width, m.height, 1)
 	case viewAddInput:
 		return m.renderAddInput()
 	case viewAddDesc:
@@ -2103,69 +2103,6 @@ func (m model) innerWidth() int {
 		w = 128
 	}
 	return w
-}
-
-// overlayCenter composites popup on top of background, centered, so the
-// surrounding background stays visible instead of the popup replacing the
-// whole screen. inset keeps the popup's own border clear of the background
-// panel's own border ring (row 0 / last content row, column 0 / last
-// column) — first attempt at this let the popup collide with the list
-// panel's border, producing visibly doubled-up "╭──╭──╮──╮" corners; the
-// caller is expected to size popup so it actually fits within that
-// inset-shrunk area (see openHelp), this only clamps the placement.
-//
-// Uses ansi.Cut (github.com/charmbracelet/x/ansi) to slice the background
-// at exact visible-column boundaries rather than raw byte/rune indexing —
-// background lines carry their own ANSI styling, and naive slicing could
-// land mid-escape-sequence and corrupt it. ansi.Cut is a well-tested part
-// of the same Charm/lipgloss ecosystem already in use here, not hand-rolled
-// column math.
-func overlayCenter(background, popup string, width, height, inset int) string {
-	bgLines := strings.Split(background, "\n")
-	actualH := len(bgLines)
-	for len(bgLines) < height {
-		bgLines = append(bgLines, strings.Repeat(" ", width))
-	}
-
-	popLines := strings.Split(popup, "\n")
-	popW := 0
-	for _, l := range popLines {
-		if w := lipgloss.Width(l); w > popW {
-			popW = w
-		}
-	}
-	popH := len(popLines)
-
-	minX, maxX := inset, max(inset, width-inset-popW)
-	minY, maxY := inset, max(inset, actualH-inset-popH)
-	xOff := clampInt((width-popW)/2, minX, maxX)
-	yOff := clampInt((actualH-popH)/2, minY, maxY)
-
-	for i, pl := range popLines {
-		row := yOff + i
-		if row < 0 || row >= len(bgLines) {
-			continue
-		}
-		bg := bgLines[row]
-		left := ansi.Cut(bg, 0, xOff)
-		right := ansi.Cut(bg, xOff+popW, width)
-		padded := pl + strings.Repeat(" ", max(0, popW-lipgloss.Width(pl)))
-		bgLines[row] = left + padded + right
-	}
-	return strings.Join(bgLines, "\n")
-}
-
-func clampInt(v, lo, hi int) int {
-	if hi < lo {
-		return lo
-	}
-	if v < lo {
-		return lo
-	}
-	if v > hi {
-		return hi
-	}
-	return v
 }
 
 // tinyBar renders a compact filled/empty progress bar of given width.

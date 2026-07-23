@@ -190,57 +190,7 @@ func TestHighlightMatches_PreservesBaseStyleAfterHighlight(t *testing.T) {
 	}
 }
 
-func TestOverlayCenter_NeverTouchesBackgroundBorderRing(t *testing.T) {
-	// Regression test: an early version of this overlay ignored the
-	// background's own border ring entirely, so a centered popup collided
-	// with the background panel's border and produced visibly doubled-up
-	// "╭──╭──╮──╮" corners. inset must keep the popup strictly inside it.
-	bg := strings.Join([]string{
-		"╭────────────────────────────╮",
-		"│ content row 1               │",
-		"│ content row 2               │",
-		"│ content row 3               │",
-		"│ content row 4               │",
-		"╰────────────────────────────╯",
-	}, "\n")
-	popup := strings.Join([]string{
-		"╭──────╮",
-		"│ help │",
-		"╰──────╯",
-	}, "\n")
-
-	out := overlayCenter(bg, popup, 31, 6, 1)
-	lines := strings.Split(out, "\n")
-
-	if lines[0] != "╭────────────────────────────╮" {
-		t.Errorf("top border row must be untouched, got %q", lines[0])
-	}
-	if lines[len(lines)-1] != "╰────────────────────────────╯" {
-		t.Errorf("bottom border row must be untouched, got %q", lines[len(lines)-1])
-	}
-	for i, l := range lines {
-		if i == 0 || i == len(lines)-1 {
-			continue
-		}
-		if len(l) == 0 {
-			continue
-		}
-		runes := []rune(l)
-		if runes[0] != '│' || runes[len(runes)-1] != '│' {
-			t.Errorf("row %d: left/right border column must be untouched, got %q", i, l)
-		}
-	}
-}
-
-func TestOverlayCenter_PopupContentAppearsCentered(t *testing.T) {
-	bg := strings.Join([]string{
-		strings.Repeat(" ", 20),
-		strings.Repeat(" ", 20),
-		strings.Repeat(" ", 20),
-		strings.Repeat(" ", 20),
-	}, "\n")
-	out := overlayCenter(bg, "XY", 20, 4, 0)
-	if !strings.Contains(out, "XY") {
-		t.Errorf("expected popup content \"XY\" to appear in the output: %q", out)
-	}
-}
+// Overlay-compositing correctness (border-ring collision, background
+// padding, oversized-popup clamping) is tested in
+// missionctl-core/overlay — this package only wires openHelp/
+// renderHelpPopup into that shared primitive.

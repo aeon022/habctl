@@ -1,13 +1,13 @@
 module github.com/aeon022/habctl
 
-go 1.26.4
+go 1.26.5
 
 require (
+	github.com/aeon022/missionctl-core v0.0.0-20260723142303-c6bca2080f33
 	github.com/anthropics/anthropic-sdk-go v1.57.0
 	github.com/charmbracelet/bubbles v1.0.0
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
-	github.com/charmbracelet/x/ansi v0.11.6
 	github.com/mark3labs/mcp-go v0.55.1
 	github.com/muesli/termenv v0.16.0
 	github.com/openai/openai-go v1.12.0
@@ -24,6 +24,7 @@ require (
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/buger/jsonparser v1.1.2 // indirect
 	github.com/charmbracelet/colorprofile v0.4.1 // indirect
+	github.com/charmbracelet/x/ansi v0.11.6 // indirect
 	github.com/charmbracelet/x/cellbuf v0.0.15 // indirect
 	github.com/charmbracelet/x/term v0.2.2 // indirect
 	github.com/clipperhouse/displaywidth v0.9.0 // indirect
