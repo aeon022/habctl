@@ -46,6 +46,13 @@ var (
 			Padding(1, 2)
 )
 
+// sectionHeader renders the "habctl · <Section>" prefix shared by every
+// view, so the app name is a constant anchor regardless of which of the
+// ~20 screens is active.
+func sectionHeader(section string) string {
+	return styleLime.Bold(true).Render("habctl") + styleMuted.Render(" · "+section)
+}
+
 // ── provider table ────────────────────────────────────────────────────────────
 
 type providerEntry struct {
@@ -1985,7 +1992,7 @@ func (m model) renderList() string {
 		borderColor = colorBorder
 	}
 
-	appName := styleLime.Bold(true).Render("habctl")
+	appName := sectionHeader("Habits")
 	dateStr := styleMuted.Render(today.Format("Mon, 02 Jan 2006"))
 	pad := innerW - lipgloss.Width(appName) - lipgloss.Width(dateStr)
 	if pad < 1 {
@@ -2208,7 +2215,7 @@ func (m model) renderList() string {
 
 func (m model) renderAddInput() string {
 	var b strings.Builder
-	b.WriteString(styleLime.Bold(true).Render("New Habit") + "\n\n")
+	b.WriteString(sectionHeader("New Habit") + "\n\n")
 	b.WriteString(styleMuted.Render("Tip: emoji prefix — 🏃 Running, ☕ Coffee, 📚 Reading") + "\n\n")
 	b.WriteString(m.input.View() + "\n\n")
 	b.WriteString(styleMuted.Render("enter continue · esc cancel"))
@@ -2223,6 +2230,7 @@ func (m model) renderAddDesc() string {
 	if m.addingIcon != "" {
 		icon = m.addingIcon + " "
 	}
+	b.WriteString(sectionHeader("New Habit") + "\n\n")
 	b.WriteString(styleLime.Bold(true).Render(icon+m.addingName) + "\n\n")
 	b.WriteString(styleMuted.Render("Short note? (enter to skip)") + "\n\n")
 	b.WriteString(m.input.View() + "\n\n")
@@ -2234,7 +2242,7 @@ func (m model) renderAddDesc() string {
 
 func (m model) renderEditHabit() string {
 	var b strings.Builder
-	b.WriteString(styleLime.Bold(true).Render("Edit Habit") + "\n\n")
+	b.WriteString(sectionHeader("Edit Habit") + "\n\n")
 
 	row := func(active bool, label, value string) {
 		cursor := "  "
@@ -2317,7 +2325,7 @@ func (m model) renderEditHabit() string {
 
 func (m model) renderGroupMgr() string {
 	var b strings.Builder
-	b.WriteString(styleLime.Bold(true).Render("Groups") + "\n\n")
+	b.WriteString(sectionHeader("Groups") + "\n\n")
 
 	if len(m.groups) == 0 {
 		b.WriteString(styleMuted.Render("No groups yet. a to create one.") + "\n\n")
@@ -2354,7 +2362,7 @@ func (m model) renderGroupMgr() string {
 
 func (m model) renderGroupNew() string {
 	var b strings.Builder
-	b.WriteString(styleLime.Bold(true).Render("New Group") + "\n\n")
+	b.WriteString(sectionHeader("New Group") + "\n\n")
 	b.WriteString(styleMuted.Render("Tip: start with emoji — 🌅 Morning, 💻 Work, 🌙 Evening") + "\n\n")
 	b.WriteString(m.input.View() + "\n\n")
 	b.WriteString(styleMuted.Render("enter create · esc cancel"))
@@ -2373,7 +2381,7 @@ func (m model) renderGroupPick() string {
 			habitName = h.Icon + " " + habitName
 		}
 	}
-	b.WriteString(styleLime.Bold(true).Render("Assign Group") + "\n")
+	b.WriteString(sectionHeader("Assign Group") + "\n")
 	b.WriteString(styleMuted.Render("→ "+habitName) + "\n\n")
 
 	options := append([]models.Group{{Name: "None (ungrouped)", Icon: "○"}}, m.groups...)
@@ -2403,7 +2411,7 @@ func (m model) renderStats() string {
 	byDate := cal.ByDate
 
 	var b strings.Builder
-	b.WriteString(styleLime.Bold(true).Render("Stats") + "\n\n")
+	b.WriteString(sectionHeader("Stats") + "\n\n")
 
 	if total == 0 {
 		b.WriteString(styleMuted.Render("Add habits first (n), then data will appear here.") + "\n")
@@ -2585,7 +2593,7 @@ func (m model) renderSuggest() string {
 	}
 
 	if m.suggestMode == "chain" {
-		b.WriteString(styleLime.Bold(true).Render("Chain Suggestions") + "  " + providerLabel + "\n\n")
+		b.WriteString(sectionHeader("Chain Suggestions") + "  " + providerLabel + "\n\n")
 
 		if len(m.chainSuggestItems) > 0 {
 			checkOff := styleMuted.Render("[ ]")
@@ -2646,7 +2654,7 @@ func (m model) renderSuggest() string {
 		title = "Goal Habits"
 		loadingMsg = "Analysing goal and creating habits…"
 	}
-	b.WriteString(styleLime.Bold(true).Render(title) + "  " + providerLabel + "\n\n")
+	b.WriteString(sectionHeader(title) + "  " + providerLabel + "\n\n")
 
 	blinkCursor := "▌"
 	if m.blinkOn {
@@ -2714,7 +2722,7 @@ func (m model) renderSuggest() string {
 
 func (m model) renderSettings() string {
 	var b strings.Builder
-	b.WriteString(styleLime.Bold(true).Render("AI Provider") + "\n")
+	b.WriteString(sectionHeader("AI Provider") + "\n")
 	b.WriteString(styleMuted.Render("Select your AI provider and configure it.") + "\n\n")
 
 	activeProvider := ai.Provider(os.Getenv("HABCTL_PROVIDER"))
@@ -2794,7 +2802,7 @@ func (m model) renderSettings() string {
 func (m model) renderKeyInput() string {
 	var b strings.Builder
 	p := providers[m.settingsCursor]
-	b.WriteString(styleLime.Bold(true).Render(p.label+" setup") + "\n\n")
+	b.WriteString(sectionHeader(p.label+" setup") + "\n\n")
 	switch p.id {
 	case ai.ProviderGemini:
 		b.WriteString(styleMuted.Render("o  open browser: aistudio.google.com") + "\n")
@@ -2814,7 +2822,7 @@ func (m model) renderKeyInput() string {
 
 func (m model) renderGeminiMenu() string {
 	var b strings.Builder
-	b.WriteString(styleLime.Bold(true).Render("Google Gemini") + "\n\n")
+	b.WriteString(sectionHeader("Google Gemini") + "\n\n")
 	options := []struct{ label, desc string }{
 		{"Browser Login (Google Account)", "No key needed — login in browser"},
 		{"API Key", "From aistudio.google.com"},
@@ -2838,7 +2846,7 @@ func (m model) renderGeminiMenu() string {
 
 func (m model) renderGeminiCID() string {
 	var b strings.Builder
-	b.WriteString(styleLime.Bold(true).Render("Set up Google OAuth2 Client") + "\n\n")
+	b.WriteString(sectionHeader("Set up Google OAuth2 Client") + "\n\n")
 	b.WriteString(styleOk.Render("o") + styleMuted.Render("  opens console.cloud.google.com/apis/credentials") + "\n\n")
 	b.WriteString(styleMuted.Render("1. Select project · 2. Create Credentials → OAuth 2.0 Client ID") + "\n")
 	b.WriteString(styleMuted.Render("3. Type: Desktop App · 4. Copy Client ID") + "\n\n")
@@ -2850,7 +2858,7 @@ func (m model) renderGeminiCID() string {
 
 func (m model) renderGeminiCS() string {
 	var b strings.Builder
-	b.WriteString(styleLime.Bold(true).Render("Google OAuth2 Client Secret") + "\n\n")
+	b.WriteString(sectionHeader("Google OAuth2 Client Secret") + "\n\n")
 	b.WriteString(styleMuted.Render("Client Secret from the same credentials page:") + "\n\n")
 	b.WriteString(styleMuted.Render("Client Secret:") + "\n")
 	b.WriteString("  " + m.input.View() + "\n\n")
@@ -2860,7 +2868,7 @@ func (m model) renderGeminiCS() string {
 
 func (m model) renderOAuthWait() string {
 	var b strings.Builder
-	b.WriteString(styleLime.Bold(true).Render("Waiting for Google login…") + "\n\n")
+	b.WriteString(sectionHeader("Waiting for Google login…") + "\n\n")
 	b.WriteString(styleMuted.Render(
 		"Browser opened.\n\n"+
 			"1. Log in with your Google account\n"+
@@ -2886,7 +2894,7 @@ func (m model) renderHelp() string {
 	}
 
 	var b strings.Builder
-	b.WriteString(lime.Render("habctl") + styleMuted.Render(" — daily habit tracker") + "\n\n")
+	b.WriteString(sectionHeader("Help") + "\n\n")
 	b.WriteString(styleMuted.Render(
 		"  Track habits every day. Build streaks. Miss a day and\n" +
 			"  the streak resets — simple, honest accountability.\n",
@@ -2946,6 +2954,7 @@ func (m model) renderHabitDetail() string {
 	if habit.Icon != "" {
 		title = habit.Icon + "  " + habit.Name
 	}
+	b.WriteString(sectionHeader("Habit") + "\n")
 	b.WriteString(styleLime.Bold(true).Render(title) + "\n")
 
 	switch {
@@ -3073,7 +3082,7 @@ func (m model) renderReview() string {
 	} else {
 		providerLabel = styleWarn.Render("no provider — S for settings")
 	}
-	b.WriteString(styleLime.Bold(true).Render("Weekly Review") + "  " + providerLabel + "\n\n")
+	b.WriteString(sectionHeader("Weekly Review") + "  " + providerLabel + "\n\n")
 
 	blinkCursor := "▌"
 	if m.blinkOn {
@@ -3103,7 +3112,7 @@ func (m model) renderReview() string {
 
 func (m model) renderNoteInput() string {
 	var b strings.Builder
-	b.WriteString(styleLime.Bold(true).Render("Note") + styleMuted.Render(" for "+m.noteForHabit) + "\n\n")
+	b.WriteString(sectionHeader("Note") + styleMuted.Render(" for "+m.noteForHabit) + "\n\n")
 	b.WriteString("  " + m.input.View() + "\n\n")
 	b.WriteString(styleMuted.Render("enter save · esc cancel"))
 	return m.panel(b.String())
@@ -3113,7 +3122,7 @@ func (m model) renderNoteInput() string {
 
 func (m model) renderArchive() string {
 	var b strings.Builder
-	b.WriteString(styleLime.Bold(true).Render("Archive") + "\n")
+	b.WriteString(sectionHeader("Archive") + "\n")
 	b.WriteString(styleMuted.Render("Archived habits — history is preserved.") + "\n\n")
 
 	if len(m.archivedHabits) == 0 {
@@ -3154,7 +3163,7 @@ func (m model) renderArchive() string {
 
 func (m model) renderGoalInput() string {
 	var b strings.Builder
-	b.WriteString(styleLime.Bold(true).Render("Goal → 3 linked Habits") + "\n\n")
+	b.WriteString(sectionHeader("Goal → 3 linked Habits") + "\n\n")
 	b.WriteString(styleMuted.Render("AI suggests 3 habits that reinforce each other.") + "\n")
 	b.WriteString(styleMuted.Render("Examples: more morning energy · better sleep · more productive") + "\n\n")
 	b.WriteString(m.input.View() + "\n\n")
@@ -3166,7 +3175,7 @@ func (m model) renderGoalInput() string {
 
 func (m model) renderChainMgr() string {
 	var b strings.Builder
-	b.WriteString(styleLime.Bold(true).Render("Habit Chains") + "\n")
+	b.WriteString(sectionHeader("Habit Chains") + "\n")
 	b.WriteString(styleMuted.Render("After habit A, do habit B next.") + "\n\n")
 
 	if len(m.chains) == 0 {
@@ -3192,10 +3201,10 @@ func (m model) renderChainMgr() string {
 func (m model) renderChainPick() string {
 	var b strings.Builder
 	if m.chainFromName == "" {
-		b.WriteString(styleLime.Bold(true).Render("Create Chain") + "\n")
+		b.WriteString(sectionHeader("Create Chain") + "\n")
 		b.WriteString(styleMuted.Render("Step 1: Which habit comes first?") + "\n\n")
 	} else {
-		b.WriteString(styleLime.Bold(true).Render("Create Chain") + "\n")
+		b.WriteString(sectionHeader("Create Chain") + "\n")
 		b.WriteString(styleMuted.Render("Step 2: Which habit follows ") +
 			styleLime.Render(m.chainFromName) + styleMuted.Render("?") + "\n\n")
 	}
