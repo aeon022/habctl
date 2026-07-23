@@ -18,6 +18,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/sahilm/fuzzy"
 )
 
 // ── colors ───────────────────────────────────────────────────────────────────
@@ -273,7 +274,6 @@ type model struct {
 
 	// ":" command palette
 	cmdCursor int // index into the filtered command matches
-
 
 	// confirm-before-delete
 	confirmPrompt string
@@ -1453,20 +1453,86 @@ func (m model) handleCommandPalette(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-// filterHabits returns habits whose name or description contains q.
+// filterHabits fuzzy-matches q against habit names (ranked best-match-first,
+// like fzf/k9s), falling back to a plain substring match on the description
+// for habits the name fuzzy-match missed — some people search by what a
+// habit is for, not just its name.
 func filterHabits(habits []models.HabitStats, q string) []models.HabitStats {
-	q = strings.ToLower(strings.TrimSpace(q))
+	q = strings.TrimSpace(q)
 	if q == "" {
 		return habits
 	}
-	var out []models.HabitStats
-	for _, h := range habits {
-		if strings.Contains(strings.ToLower(h.Habit.Name), q) ||
-			strings.Contains(strings.ToLower(h.Habit.Description), q) {
+
+	names := make([]string, len(habits))
+	for i, h := range habits {
+		names[i] = h.Habit.Name
+	}
+	matches := fuzzy.Find(q, names)
+
+	out := make([]models.HabitStats, 0, len(matches))
+	matched := make(map[int]bool, len(matches))
+	for _, mt := range matches {
+		out = append(out, habits[mt.Index])
+		matched[mt.Index] = true
+	}
+
+	ql := strings.ToLower(q)
+	for i, h := range habits {
+		if matched[i] {
+			continue
+		}
+		if strings.Contains(strings.ToLower(h.Habit.Description), ql) {
 			out = append(out, h)
 		}
 	}
 	return out
+}
+
+// fuzzyMatchIndexes returns the rune indexes within s that q fuzzy-matched,
+// or nil if q is empty or doesn't match at all.
+func fuzzyMatchIndexes(q, s string) []int {
+	if q == "" {
+		return nil
+	}
+	matches := fuzzy.Find(q, []string{s})
+	if len(matches) == 0 {
+		return nil
+	}
+	return matches[0].MatchedIndexes
+}
+
+// highlightMatches renders s with the rune positions in idxs (from
+// fuzzyMatchIndexes) styled via a warm, underlined variant of base, and
+// every other character via base itself — fzf-style match highlighting.
+//
+// This renders one character at a time rather than nesting a highlighted
+// span inside a single outer Render() call: lipgloss's Render() ends every
+// string with a full SGR reset, so an inner Render() call's reset would
+// wipe out the outer style for everything after the first highlighted
+// character. Per-character rendering keeps every segment self-contained
+// (verified: each carries its own open+reset), at the cost of more escape
+// bytes — negligible for name-length strings in a TUI.
+//
+// idxs are indexes into s BEFORE any truncation — callers must resolve
+// indexes against the same, untruncated string used to compute them.
+func highlightMatches(s string, idxs []int, base lipgloss.Style) string {
+	if len(idxs) == 0 {
+		return base.Render(s)
+	}
+	hi := base.Foreground(colorWarn).Underline(true)
+	matchSet := make(map[int]bool, len(idxs))
+	for _, i := range idxs {
+		matchSet[i] = true
+	}
+	var b strings.Builder
+	for i, r := range []rune(s) {
+		if matchSet[i] {
+			b.WriteString(hi.Render(string(r)))
+		} else {
+			b.WriteString(base.Render(string(r)))
+		}
+	}
+	return b.String()
 }
 
 // askConfirm switches to the confirmation prompt; action runs only on "y"/enter.
@@ -2277,13 +2343,14 @@ func (m model) renderList() string {
 			}
 			dotsCol := lipgloss.NewStyle().Width(dotsW).Render(dotsBuf.String())
 
+			matchIdx := fuzzyMatchIndexes(m.filterQ, h.Habit.Name)
 			var rawName string
 			if h.Habit.Icon != "" {
-				rawName = h.Habit.Icon + " " + truncate(h.Habit.Name, nameW-4)
+				rawName = ns.Render(h.Habit.Icon+" ") + highlightMatches(truncate(h.Habit.Name, nameW-4), matchIdx, ns)
 			} else {
-				rawName = truncate(h.Habit.Name, nameW-1)
+				rawName = highlightMatches(truncate(h.Habit.Name, nameW-1), matchIdx, ns)
 			}
-			nameCol := lipgloss.NewStyle().Width(nameW).Render(ns.Render(rawName))
+			nameCol := lipgloss.NewStyle().Width(nameW).Render(rawName)
 
 			var skContent string
 			if h.Habit.FreqTarget > 0 {

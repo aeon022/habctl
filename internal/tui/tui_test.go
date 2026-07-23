@@ -1,10 +1,14 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 
+	"github.com/aeon022/habctl/internal/models"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 )
 
 func newTestModel() model {
@@ -117,5 +121,71 @@ func TestHandleCommandPalette_ArrowNavigationStaysInBounds(t *testing.T) {
 	}
 	if m.cmdCursor != len(matches)-1 {
 		t.Errorf("down past the end should clamp at %d, got %d", len(matches)-1, m.cmdCursor)
+	}
+}
+
+func TestFilterHabits_FuzzyMatchesName(t *testing.T) {
+	habits := []models.HabitStats{
+		{Habit: models.Habit{Name: "Morning Run"}},
+		{Habit: models.Habit{Name: "Reading"}},
+	}
+	got := filterHabits(habits, "run")
+	if len(got) != 1 || got[0].Habit.Name != "Morning Run" {
+		t.Errorf("expected only \"Morning Run\" to match \"run\", got %+v", got)
+	}
+}
+
+func TestFilterHabits_FallsBackToDescriptionSubstring(t *testing.T) {
+	habits := []models.HabitStats{
+		{Habit: models.Habit{Name: "Meditation", Description: "calm and focus"}},
+		{Habit: models.Habit{Name: "Reading"}},
+	}
+	got := filterHabits(habits, "focus")
+	if len(got) != 1 || got[0].Habit.Name != "Meditation" {
+		t.Errorf("expected \"Meditation\" to match via description fallback, got %+v", got)
+	}
+}
+
+func TestFilterHabits_EmptyQueryReturnsAll(t *testing.T) {
+	habits := []models.HabitStats{{Habit: models.Habit{Name: "A"}}, {Habit: models.Habit{Name: "B"}}}
+	if got := filterHabits(habits, ""); len(got) != 2 {
+		t.Errorf("empty query should return all habits, got %d", len(got))
+	}
+}
+
+func TestFuzzyMatchIndexes(t *testing.T) {
+	idx := fuzzyMatchIndexes("run", "Morning Run")
+	if len(idx) != 3 {
+		t.Fatalf("expected 3 matched indexes for \"run\" in \"Morning Run\", got %v", idx)
+	}
+	if idx := fuzzyMatchIndexes("", "anything"); idx != nil {
+		t.Errorf("empty query should return nil indexes, got %v", idx)
+	}
+	if idx := fuzzyMatchIndexes("zzz", "Morning Run"); idx != nil {
+		t.Errorf("non-matching query should return nil indexes, got %v", idx)
+	}
+}
+
+func TestHighlightMatches_PreservesBaseStyleAfterHighlight(t *testing.T) {
+	// Regression test: nesting a highlighted lipgloss.Render() call inside
+	// another Render() call silently drops the outer style after the first
+	// highlighted character, because every Render() call ends with a full
+	// SGR reset. highlightMatches must render per-character instead so the
+	// base style survives past a highlighted run.
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	base := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("189"))
+
+	out := highlightMatches("abRuncd", []int{2, 3, 4}, base)
+
+	// The last character ('d') must still carry the base style's bold SGR
+	// attribute (1) — if the outer style got wiped by a nested reset, its
+	// segment would render as plain, unstyled text (just "\x1b[0md\x1b[0m").
+	dPos := strings.LastIndex(out, "d")
+	if dPos == -1 {
+		t.Fatalf("expected rendered output to still contain the trailing character: %q", out)
+	}
+	openCode := out[strings.LastIndex(out[:dPos], "\x1b["):dPos]
+	if !strings.Contains(openCode, "1") {
+		t.Errorf("expected base style (bold) to survive after the highlighted run, 'd' opening code = %q", openCode)
 	}
 }
