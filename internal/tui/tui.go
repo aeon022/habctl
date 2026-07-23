@@ -16,8 +16,10 @@ import (
 	"github.com/aeon022/habctl/internal/models"
 	"github.com/aeon022/habctl/internal/store"
 	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/sahilm/fuzzy"
 )
 
@@ -274,6 +276,11 @@ type model struct {
 
 	// ":" command palette
 	cmdCursor int // index into the filtered command matches
+
+	// "?" transient help popup
+	helpVP   viewport.Model
+	helpPopW int
+	helpPopH int
 
 	// confirm-before-delete
 	confirmPrompt string
@@ -880,7 +887,7 @@ func (m model) handleList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.settingsCursor = 0
 
 	case "?":
-		m.state = viewHelp
+		m = m.openHelp()
 	}
 	return m, nil
 }
@@ -1683,8 +1690,11 @@ func (m model) handleHelp(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case "?", "esc", "q":
 		m.state = viewList
+		return m, nil
 	}
-	return m, nil
+	var cmd tea.Cmd
+	m.helpVP, cmd = m.helpVP.Update(msg)
+	return m, cmd
 }
 
 func (m model) handleSuggest(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -2015,7 +2025,9 @@ func (m model) handleKeyInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m model) View() string {
 	switch m.state {
 	case viewHelp:
-		return m.renderHelp()
+		// "?" is only reachable from the main list (handleList), so the list
+		// is always the correct background to keep visible behind the popup.
+		return overlayCenter(m.renderList(), m.renderHelpPopup(), m.width, m.height, 1)
 	case viewAddInput:
 		return m.renderAddInput()
 	case viewAddDesc:
@@ -2091,6 +2103,69 @@ func (m model) innerWidth() int {
 		w = 128
 	}
 	return w
+}
+
+// overlayCenter composites popup on top of background, centered, so the
+// surrounding background stays visible instead of the popup replacing the
+// whole screen. inset keeps the popup's own border clear of the background
+// panel's own border ring (row 0 / last content row, column 0 / last
+// column) — first attempt at this let the popup collide with the list
+// panel's border, producing visibly doubled-up "╭──╭──╮──╮" corners; the
+// caller is expected to size popup so it actually fits within that
+// inset-shrunk area (see openHelp), this only clamps the placement.
+//
+// Uses ansi.Cut (github.com/charmbracelet/x/ansi) to slice the background
+// at exact visible-column boundaries rather than raw byte/rune indexing —
+// background lines carry their own ANSI styling, and naive slicing could
+// land mid-escape-sequence and corrupt it. ansi.Cut is a well-tested part
+// of the same Charm/lipgloss ecosystem already in use here, not hand-rolled
+// column math.
+func overlayCenter(background, popup string, width, height, inset int) string {
+	bgLines := strings.Split(background, "\n")
+	actualH := len(bgLines)
+	for len(bgLines) < height {
+		bgLines = append(bgLines, strings.Repeat(" ", width))
+	}
+
+	popLines := strings.Split(popup, "\n")
+	popW := 0
+	for _, l := range popLines {
+		if w := lipgloss.Width(l); w > popW {
+			popW = w
+		}
+	}
+	popH := len(popLines)
+
+	minX, maxX := inset, max(inset, width-inset-popW)
+	minY, maxY := inset, max(inset, actualH-inset-popH)
+	xOff := clampInt((width-popW)/2, minX, maxX)
+	yOff := clampInt((actualH-popH)/2, minY, maxY)
+
+	for i, pl := range popLines {
+		row := yOff + i
+		if row < 0 || row >= len(bgLines) {
+			continue
+		}
+		bg := bgLines[row]
+		left := ansi.Cut(bg, 0, xOff)
+		right := ansi.Cut(bg, xOff+popW, width)
+		padded := pl + strings.Repeat(" ", max(0, popW-lipgloss.Width(pl)))
+		bgLines[row] = left + padded + right
+	}
+	return strings.Join(bgLines, "\n")
+}
+
+func clampInt(v, lo, hi int) int {
+	if hi < lo {
+		return lo
+	}
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
 }
 
 // tinyBar renders a compact filled/empty progress bar of given width.
@@ -3093,7 +3168,9 @@ func (m model) renderOAuthWait() string {
 
 // ── renderAdd / renderHelp ────────────────────────────────────────────────────
 
-func (m model) renderHelp() string {
+// renderHelp is now unused by the "?" key directly (see openHelp /
+// renderHelpPopup) but kept as the content source both paths render.
+func (m model) helpContent() string {
 	lime := styleLime.Bold(true)
 	key := lipgloss.NewStyle().Foreground(colorLime).Width(26)
 	desc := styleMuted
@@ -3144,8 +3221,49 @@ func (m model) renderHelp() string {
 	b.WriteString(section("Other"))
 	b.WriteString(row("?", "toggle this help screen"))
 	b.WriteString(row("q / ctrl+c", "quit"))
-	b.WriteString("\n  " + styleMuted.Render("esc / ?  close help"))
-	return m.panel(b.String())
+	return b.String()
+}
+
+// openHelp sizes and populates the transient help popup (see
+// renderHelpPopup/overlayCenter) so it always fits within the background
+// list panel's own border — computed from the ACTUAL rendered background,
+// not the terminal size, since the panel's height depends on content (few
+// habits ⇒ a short panel) and a popup taller than that would spill onto or
+// past the panel's own border row.
+func (m model) openHelp() model {
+	bg := m.renderList()
+	bgLines := strings.Split(bg, "\n")
+
+	const inset = 1 // stay clear of the background panel's border ring
+	safeH := max(6, len(bgLines)-2*inset)
+	popH := min(safeH, 22)
+	popW := min(76, m.width-2*inset)
+	if popW < 40 {
+		popW = 40
+	}
+
+	// panelStyle overhead: border 1+1, padding(1,2) → 2 rows, 4 cols; -1 more
+	// row reserved for the footer (scroll/close hint) below the viewport.
+	vp := viewport.New(popW-6, popH-5)
+	vp.SetContent(m.helpContent())
+
+	m.helpVP = vp
+	m.helpPopW = popW
+	m.helpPopH = popH
+	m.state = viewHelp
+	return m
+}
+
+// renderHelpPopup renders the help viewport in a bordered box, meant to be
+// composited over the list view via overlayCenter rather than replacing the
+// whole screen — the list stays visible around it.
+func (m model) renderHelpPopup() string {
+	footer := "esc / ?  close"
+	if m.helpVP.TotalLineCount() > m.helpVP.Height {
+		footer = fmt.Sprintf("j/k scroll (%d%%)  ·  %s", int(m.helpVP.ScrollPercent()*100), footer)
+	}
+	body := m.helpVP.View() + "\n" + styleMuted.Render(footer)
+	return panelStyle.Width(m.helpPopW).Render(body)
 }
 
 // ── renderHabitDetail ─────────────────────────────────────────────────────────
