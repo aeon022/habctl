@@ -53,6 +53,60 @@ func sectionHeader(section string) string {
 	return styleLime.Bold(true).Render("habctl") + styleMuted.Render(" · "+section)
 }
 
+// ── command palette ("​:") ────────────────────────────────────────────────────
+//
+// Prototype for one tool before rolling out to the rest of the suite: types
+// out full words instead of memorizing single-key shortcuts across habctl's
+// ~20 views. Reuses the exact same key handling every shortcut already goes
+// through (handleList) by synthesizing the mapped keypress, so behavior is
+// guaranteed identical to typing the key directly.
+
+type paletteCommand struct {
+	name string // typed to match, e.g. "stats"
+	desc string
+	key  string // the existing single-key shortcut this command triggers
+}
+
+var paletteCommands = []paletteCommand{
+	{"new", "Add a new habit", "n"},
+	{"edit", "Edit selected habit", "e"},
+	{"delete", "Delete selected habit", "d"},
+	{"archive", "Archive selected habit", "a"},
+	{"archived", "Open archive (restore / delete)", "A"},
+	{"move", "Move habit to a group", "m"},
+	{"groups", "Manage groups", "G"},
+	{"goal", "Goal → 3 linked habits (AI decompose)", "g"},
+	{"suggest", "AI suggestions (context-aware)", "s"},
+	{"review", "AI weekly review — pattern coaching", "r"},
+	{"stats", "Stats — heatmap & completion", "t"},
+	{"chains", "Manage habit chains", "c"},
+	{"settings", "AI provider & API keys", "S"},
+	{"note", "Add note to today's check-in", "N"},
+	{"window", "Toggle 7d / 30d streak window", "w"},
+	{"compact", "Compact/normal toggle", "v"},
+	{"help", "Show help", "?"},
+	{"quit", "Quit habctl", "q"},
+}
+
+// matchPaletteCommands returns commands whose name contains q (case
+// insensitive), name-prefix matches first.
+func matchPaletteCommands(q string) []paletteCommand {
+	q = strings.ToLower(strings.TrimSpace(q))
+	if q == "" {
+		return paletteCommands
+	}
+	var prefix, contains []paletteCommand
+	for _, c := range paletteCommands {
+		switch {
+		case strings.HasPrefix(c.name, q):
+			prefix = append(prefix, c)
+		case strings.Contains(c.name, q):
+			contains = append(contains, c)
+		}
+	}
+	return append(prefix, contains...)
+}
+
 // ── provider table ────────────────────────────────────────────────────────────
 
 type providerEntry struct {
@@ -99,6 +153,7 @@ const (
 	viewGoalInput   // goal → 3 decomposed habits
 	viewConfirm     // confirmation prompt before a destructive action
 	viewFilterInput // "/" filter over the habit list
+	viewCommand     // ":" command palette
 )
 
 // ── messages ─────────────────────────────────────────────────────────────────
@@ -215,6 +270,10 @@ type model struct {
 	// "/" filter over the habit list
 	allHabits []models.HabitStats
 	filterQ   string
+
+	// ":" command palette
+	cmdCursor int // index into the filtered command matches
+
 
 	// confirm-before-delete
 	confirmPrompt string
@@ -458,6 +517,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleConfirm(msg)
 		case viewFilterInput:
 			return m.handleFilterInput(msg)
+		case viewCommand:
+			return m.handleCommandPalette(msg)
 		case viewOAuthWait:
 			if msg.String() == "ctrl+c" {
 				return m, tea.Quit
@@ -485,6 +546,15 @@ func (m model) handleList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "q", "ctrl+c":
 		return m, tea.Quit
+
+	case ":":
+		m.state = viewCommand
+		m.cmdCursor = 0
+		m.input.Placeholder = "command…"
+		m.input.SetValue("")
+		m.input.CursorEnd()
+		m.input.Focus()
+		return m, nil
 
 	case "/":
 		m.state = viewFilterInput
@@ -1337,6 +1407,52 @@ func (m model) handleFilterInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+func (m model) handleCommandPalette(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	closeCmd := func(mm model) model {
+		mm.state = viewList
+		mm.input.Blur()
+		mm.input.SetValue("")
+		mm.cmdCursor = 0
+		return mm
+	}
+
+	switch msg.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+	case "esc":
+		m = closeCmd(m)
+		return m, nil
+	case "up", "ctrl+p":
+		if m.cmdCursor > 0 {
+			m.cmdCursor--
+		}
+		return m, nil
+	case "down", "ctrl+n":
+		matches := matchPaletteCommands(m.input.Value())
+		if m.cmdCursor < len(matches)-1 {
+			m.cmdCursor++
+		}
+		return m, nil
+	case "enter":
+		matches := matchPaletteCommands(m.input.Value())
+		if len(matches) == 0 {
+			m = closeCmd(m)
+			return m, nil
+		}
+		if m.cmdCursor >= len(matches) {
+			m.cmdCursor = len(matches) - 1
+		}
+		chosen := matches[m.cmdCursor]
+		m = closeCmd(m)
+		return m.handleList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(chosen.key)})
+	}
+
+	var cmd tea.Cmd
+	m.input, cmd = m.input.Update(msg)
+	m.cmdCursor = 0
+	return m, cmd
+}
+
 // filterHabits returns habits whose name or description contains q.
 func filterHabits(habits []models.HabitStats, q string) []models.HabitStats {
 	q = strings.ToLower(strings.TrimSpace(q))
@@ -1880,6 +1996,8 @@ func (m model) View() string {
 		return m.renderConfirm()
 	case viewFilterInput:
 		return m.renderList()
+	case viewCommand:
+		return m.renderList()
 	default:
 		return m.renderList()
 	}
@@ -1944,6 +2062,29 @@ func (m model) renderList() string {
 		filterLine = "  / " + m.input.View() + "\n"
 	} else if m.filterQ != "" {
 		filterLine = "  " + styleMuted.Render("filter: /"+m.filterQ+"  (esc clears)") + "\n"
+	}
+
+	// active ":" command palette: input line + up to 6 live-filtered matches
+	cmdLine := ""
+	if m.state == viewCommand {
+		var cb strings.Builder
+		cb.WriteString("  : " + m.input.View() + "\n")
+		matches := matchPaletteCommands(m.input.Value())
+		if len(matches) > 6 {
+			matches = matches[:6]
+		}
+		for i, c := range matches {
+			row := fmt.Sprintf("%-11s %s", c.name, c.desc)
+			if i == m.cmdCursor {
+				cb.WriteString("    " + styleOkBold.Render("▶ "+row) + "\n")
+			} else {
+				cb.WriteString("      " + styleMuted.Render(row) + "\n")
+			}
+		}
+		if len(matches) == 0 {
+			cb.WriteString("    " + styleMuted.Render("no matching command") + "\n")
+		}
+		cmdLine = cb.String()
 	}
 
 	// ── header ────────────────────────────────────────────────────────────────
@@ -2022,6 +2163,9 @@ func (m model) renderList() string {
 	b.WriteString(statsLine.String() + "\n")
 	if filterLine != "" {
 		b.WriteString(filterLine)
+	}
+	if cmdLine != "" {
+		b.WriteString(cmdLine)
 	}
 	b.WriteString("\n")
 
@@ -2205,6 +2349,7 @@ func (m model) renderList() string {
 		fk("e", "edit") + styleMuted.Render("  ") +
 		fk("s", "AI") + styleMuted.Render("  ") +
 		fk("r", "review") + styleMuted.Render("  ") +
+		fk(":", "cmd") + styleMuted.Render("  ") +
 		fk("?", "help") + styleMuted.Render("  ") +
 		fk("q", "quit")
 	b.WriteString(footer)
@@ -2903,6 +3048,7 @@ func (m model) renderHelp() string {
 	b.WriteString(row("j / ↓", "move down"))
 	b.WriteString(row("k / ↑", "move up"))
 	b.WriteString(row("/", "filter habits (esc clears)"))
+	b.WriteString(row(":", "command palette — type an action by name"))
 	b.WriteString(section("Habits"))
 	b.WriteString(row("space", "check in / undo check-in (toggle)"))
 	b.WriteString(row("enter", "open habit (detail, description, note history)"))
