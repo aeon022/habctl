@@ -331,7 +331,7 @@ func Run(s *store.Store) error {
 
 	cfg, _ := config.Load()
 	m := model{s: s, input: ti, cfg: cfg}
-	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithInput(os.Stdin), tea.WithOutput(os.Stdout))
+	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion(), tea.WithInput(os.Stdin), tea.WithOutput(os.Stdout))
 	_, err := p.Run()
 	return err
 }
@@ -348,6 +348,26 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		return m, nil
+
+	case tea.MouseMsg:
+		switch msg.Button {
+		case tea.MouseButtonWheelUp:
+			if m.state == viewList && m.cursor > 0 {
+				m.cursor--
+			}
+		case tea.MouseButtonWheelDown:
+			if m.state == viewList && m.cursor < len(m.habits)-1 {
+				m.cursor++
+			}
+		case tea.MouseButtonLeft:
+			if msg.Action != tea.MouseActionPress || m.state != viewList {
+				return m, nil
+			}
+			if i := m.rowHitTest(msg.Y); i >= 0 {
+				m.cursor = i
+			}
+		}
 		return m, nil
 
 	case habitsLoadedMsg:
@@ -2433,6 +2453,54 @@ func (m model) renderList() string {
 		fk("q", "quit")
 	b.WriteString(footer)
 	return m.dynamicPanel(b.String(), borderColor)
+}
+
+// rowHitTest returns the m.habits index at screen row y, or -1 if the
+// click landed on a header, group label, description/note line, or
+// outside the list. Mirrors renderList's exact line-counting: panel
+// border+padding(2), header+stats(2), an optional filter chip(1), a
+// blank separator(1), then per habit — an optional group-change block
+// (2 lines for a new named group, 1 blank line when returning to
+// "no group" past the first row), the main row(1), 0-3 optional
+// description/note/chain lines when not compact, and a trailing blank(1).
+func (m model) rowHitTest(y int) int {
+	row := 2 + 2 // panel border+padding, header+stats
+	if m.filterQ != "" {
+		row++
+	}
+	row++ // blank line before the list
+
+	var lastGroupID int64 = -1
+	for i, h := range m.habits {
+		gid := h.Habit.GroupID
+		if gid != lastGroupID {
+			lastGroupID = gid
+			if gid != 0 {
+				row += 2
+			} else if i > 0 {
+				row++
+			}
+		}
+
+		if y == row {
+			return i
+		}
+		row++ // main row
+
+		if !m.compact {
+			if h.Habit.Description != "" {
+				row++
+			}
+			if h.TodayNote != "" {
+				row++
+			}
+			if h.ChainTo != "" {
+				row++
+			}
+		}
+		row++ // trailing blank
+	}
+	return -1
 }
 
 // ── renderAddInput ────────────────────────────────────────────────────────────
