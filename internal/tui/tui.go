@@ -2284,9 +2284,17 @@ func (m model) renderList() string {
 			nameW = 20
 		}
 
+		visible, start := m.visibleHabitsWithStart(m.habitWindowHeight())
 		var lastGroupID int64 = -1
+		if start > 0 {
+			// Seed with the group of the row just above the window so a
+			// scrolled-into group doesn't re-print its header — matches
+			// how scrolling past a header already behaves in this loop.
+			lastGroupID = m.habits[start-1].Habit.GroupID
+		}
 
-		for i, h := range m.habits {
+		for localI, h := range visible {
+			i := start + localI
 			gid := h.Habit.GroupID
 			if gid != lastGroupID {
 				lastGroupID = gid
@@ -2455,6 +2463,49 @@ func (m model) renderList() string {
 	return m.dynamicPanel(b.String(), borderColor)
 }
 
+// habitWindowHeight is the approximate row-count budget for the scroll
+// window (visibleHabitsWithStart) — an approximation like budgetctl/
+// calctl/taskctl already use elsewhere, since rows here are variable
+// height (1-4 lines) and an exact line budget isn't worth the
+// complexity: panel border+padding top(2) + header+stats(2) + optional
+// filter chip(1) + blank(1) reserved up front, then a generous fixed
+// footer reservation (blank + footer text + optional message + panel
+// border+padding bottom) so the last row+description never gets clipped.
+func (m model) habitWindowHeight() int {
+	preamble := 4
+	if m.filterQ != "" {
+		preamble++
+	}
+	h := m.height - preamble - 6
+	if h < 1 {
+		h = 1
+	}
+	return h
+}
+
+// visibleHabitsWithStart returns the scroll-windowed slice of m.habits
+// that keeps m.cursor in view, plus its start index into m.habits, so
+// renderList and rowHitTest can't drift apart on which habits are shown.
+func (m model) visibleHabitsWithStart(height int) ([]models.HabitStats, int) {
+	if len(m.habits) == 0 {
+		return nil, 0
+	}
+	start := 0
+	end := len(m.habits)
+	if end-start > height {
+		mid := m.cursor - height/2
+		if mid < 0 {
+			mid = 0
+		}
+		if mid+height > end {
+			mid = end - height
+		}
+		start = mid
+		end = start + height
+	}
+	return m.habits[start:end], start
+}
+
 // rowHitTest returns the m.habits index at screen row y, or -1 if the
 // click landed on a header, group label, description/note line, or
 // outside the list. Mirrors renderList's exact line-counting: panel
@@ -2463,6 +2514,9 @@ func (m model) renderList() string {
 // (2 lines for a new named group, 1 blank line when returning to
 // "no group" past the first row), the main row(1), 0-3 optional
 // description/note/chain lines when not compact, and a trailing blank(1).
+// Walks the same scroll window renderList computes (visibleHabitsWithStart,
+// seeded with the group of the row just above the window) so a click
+// lands on the habit it visually appears to be over once scrolled.
 func (m model) rowHitTest(y int) int {
 	row := 2 + 2 // panel border+padding, header+stats
 	if m.filterQ != "" {
@@ -2470,8 +2524,13 @@ func (m model) rowHitTest(y int) int {
 	}
 	row++ // blank line before the list
 
+	visible, start := m.visibleHabitsWithStart(m.habitWindowHeight())
 	var lastGroupID int64 = -1
-	for i, h := range m.habits {
+	if start > 0 {
+		lastGroupID = m.habits[start-1].Habit.GroupID
+	}
+	for localI, h := range visible {
+		i := start + localI
 		gid := h.Habit.GroupID
 		if gid != lastGroupID {
 			lastGroupID = gid
