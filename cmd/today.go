@@ -1,11 +1,15 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 )
+
+var todayJSON bool
 
 var todayCmd = &cobra.Command{
 	Use:   "today",
@@ -22,11 +26,6 @@ var todayCmd = &cobra.Command{
 			return err
 		}
 
-		if len(allStats) == 0 {
-			fmt.Println("No habits yet. Add one with: habctl add \"<name>\"")
-			return nil
-		}
-
 		done := 0
 		for _, st := range allStats {
 			if st.CheckedToday {
@@ -34,6 +33,34 @@ var todayCmd = &cobra.Command{
 			}
 		}
 		total := len(allStats)
+
+		if todayJSON {
+			type habitToday struct {
+				Name         string `json:"name"`
+				CheckedToday bool   `json:"checked_today"`
+				Streak       int    `json:"streak"`
+			}
+			data := make([]habitToday, 0, len(allStats))
+			for _, st := range allStats {
+				data = append(data, habitToday{
+					Name:         st.Habit.Name,
+					CheckedToday: st.CheckedToday,
+					Streak:       st.Streak,
+				})
+			}
+			enc := json.NewEncoder(os.Stdout)
+			enc.SetIndent("", "  ")
+			return enc.Encode(map[string]any{
+				"tool": "habctl", "command": "today",
+				"done": done, "total": total,
+				"data": data,
+			})
+		}
+
+		if len(allStats) == 0 {
+			fmt.Println("No habits yet. Add one with: habctl add \"<name>\"")
+			return nil
+		}
 
 		lime := lipgloss.NewStyle().Foreground(lipgloss.Color("#84cc16"))
 		muted := lipgloss.NewStyle().Foreground(lipgloss.Color("#718096"))
@@ -72,4 +99,8 @@ var todayCmd = &cobra.Command{
 		fmt.Println()
 		return nil
 	},
+}
+
+func init() {
+	todayCmd.Flags().BoolVar(&todayJSON, "json", false, "Output as JSON")
 }
