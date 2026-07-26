@@ -33,6 +33,12 @@ var (
 	colorFg     = lipgloss.AdaptiveColor{Light: "#1e293b", Dark: "#e2e8f0"}
 	colorBorder = lipgloss.AdaptiveColor{Light: "#cbd5e1", Dark: "#1e1e2e"}
 	colorGroup  = lipgloss.AdaptiveColor{Light: "#0ea5e9", Dark: "#38bdf8"}
+	// colorHover previews the row under the mouse before a click commits
+	// it as the selection. habctl doesn't use a background-fill selection
+	// style like the rest of the suite (its cursor row is marked by
+	// checkbox/name color alone) — hover follows that same convention
+	// with its own color, distinct from lime/ok/warn/group.
+	colorHover = lipgloss.AdaptiveColor{Light: "#7c3aed", Dark: "#a78bfa"}
 
 	styleLime   = lipgloss.NewStyle().Foreground(colorLime)
 	styleMuted  = lipgloss.NewStyle().Foreground(colorMuted)
@@ -42,6 +48,7 @@ var (
 	styleWarnBd = lipgloss.NewStyle().Foreground(colorWarn).Bold(true)
 	styleFg     = lipgloss.NewStyle().Foreground(colorFg)
 	styleGroup  = lipgloss.NewStyle().Foreground(colorGroup).Bold(true)
+	styleHover  = lipgloss.NewStyle().Foreground(colorHover)
 
 	panelStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
@@ -232,6 +239,7 @@ type model struct {
 	groups   []models.Group
 	chains   []models.Chain
 	cursor   int
+	hoverRow int // m.habits index under the mouse cursor, -1 when none
 	state    viewState
 	input    textinput.Model
 	s        *store.Store
@@ -330,8 +338,8 @@ func Run(s *store.Store) error {
 	ti.CharLimit = 80
 
 	cfg, _ := config.Load()
-	m := model{s: s, input: ti, cfg: cfg}
-	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion(), tea.WithInput(os.Stdin), tea.WithOutput(os.Stdout))
+	m := model{s: s, input: ti, cfg: cfg, hoverRow: -1}
+	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseAllMotion(), tea.WithInput(os.Stdin), tea.WithOutput(os.Stdout))
 	_, err := p.Run()
 	return err
 }
@@ -366,6 +374,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if i := m.rowHitTest(msg.Y); i >= 0 {
 				m.cursor = i
+			}
+		case tea.MouseButtonNone:
+			if msg.Action == tea.MouseActionMotion && m.state == viewList {
+				m.hoverRow = m.rowHitTest(msg.Y)
 			}
 		}
 		return m, nil
@@ -2330,6 +2342,7 @@ func (m model) renderList() string {
 			}
 
 			selected := i == m.cursor
+			hovered := !selected && i == m.hoverRow
 			var atRisk bool
 			if h.Habit.FreqTarget > 0 {
 				wd := int(time.Now().Weekday())
@@ -2352,6 +2365,12 @@ func (m model) renderList() string {
 			case selected:
 				cb = styleLime.Render("[·]") + " "
 				ns = lipgloss.NewStyle().Foreground(colorFg).Bold(true)
+			case hovered && h.CheckedToday:
+				cb = styleHover.Render("[✓]") + " "
+				ns = styleHover
+			case hovered:
+				cb = styleHover.Render("[·]") + " "
+				ns = styleHover
 			case h.CheckedToday:
 				cb = styleOk.Render("[✓]") + " "
 				ns = styleOk
