@@ -174,6 +174,10 @@ const (
 // double-click.
 const doubleClickWindow = 400 * time.Millisecond
 
+// undoWindow is how long after a group/chain delete "u" still restores
+// it — same duration taskctl uses for its own delete-undo.
+const undoWindow = 5 * time.Second
+
 // ── messages ─────────────────────────────────────────────────────────────────
 
 type suggestChunkResult struct {
@@ -231,6 +235,12 @@ type groupsLoadedMsg []models.Group
 type chainsLoadedMsg []models.Chain
 type errMsg struct{ err error }
 type clearMsgMsg struct{}
+type clearUndoMsg struct{} // fires undoWindow after a group/chain delete — clears the toast AND the undo capability together, same coupling taskctl uses
+type groupDeletedMsg struct {
+	group      models.Group
+	habitNames []string // habits that were in the group, captured before delete for undo re-linking
+}
+type chainDeletedMsg struct{ chain models.Chain }
 type statusMsg string
 type blinkMsg struct{}
 type notesLoadedMsg struct {
@@ -304,6 +314,12 @@ type model struct {
 	confirmPrompt string
 	confirmAction tea.Cmd
 	confirmReturn viewState
+
+	// undo: "u" within undoWindow of a group/chain delete restores it —
+	// same pattern and window taskctl uses for its own delete-undo.
+	lastDeletedGroup       *models.Group
+	lastDeletedGroupHabits []string // habits that were in the group, re-linked on undo
+	lastDeletedChain       *models.Chain
 
 	// chain management
 	chainCursor     int    // cursor in viewChainMgr
@@ -435,6 +451,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.chains = []models.Chain(msg)
 		return m, nil
 
+	case groupDeletedMsg:
+		m.lastDeletedGroup = &msg.group
+		m.lastDeletedGroupHabits = msg.habitNames
+		m.message = "Group deleted: " + msg.group.Name + " — press u to undo"
+		m.isErr = false
+		days := 30
+		if m.weekView {
+			days = 7
+		}
+		return m, tea.Batch(loadHabits(m.s, days), loadGroups(m.s), clearAfterUndo())
+
+	case chainDeletedMsg:
+		m.lastDeletedChain = &msg.chain
+		m.message = fmt.Sprintf("Chain deleted: %s → %s — press u to undo", msg.chain.FromName, msg.chain.ToName)
+		m.isErr = false
+		return m, tea.Batch(loadChains(m.s), clearAfterUndo())
+
 	case statusMsg:
 		m.message = string(msg)
 		m.isErr = false
@@ -452,6 +485,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case clearMsgMsg:
 		m.message = ""
 		m.isErr = false
+		return m, nil
+
+	case clearUndoMsg:
+		m.message = ""
+		m.isErr = false
+		m.lastDeletedGroup = nil
+		m.lastDeletedGroupHabits = nil
+		m.lastDeletedChain = nil
 		return m, nil
 
 	case suggestChunkMsg:
@@ -1095,19 +1136,44 @@ func (m model) handleGroupMgr(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.input.Reset()
 		m.input.Placeholder = "🌅 Morning (emoji + name)"
 		m.input.Focus()
+	case "u":
+		if m.lastDeletedGroup != nil {
+			g := m.lastDeletedGroup
+			habitNames := m.lastDeletedGroupHabits
+			m.lastDeletedGroup = nil
+			m.lastDeletedGroupHabits = nil
+			m.message = ""
+			s := m.s
+			return m, func() tea.Msg {
+				newGroup, err := s.AddGroup(g.Name, g.Icon)
+				if err != nil {
+					return errMsg{err}
+				}
+				for _, name := range habitNames {
+					_ = s.SetHabitGroup(name, newGroup.ID)
+				}
+				return statusMsg("Group restored: " + g.Name)
+			}
+		}
 	case "d":
 		if len(m.groups) == 0 {
 			break
 		}
 		g := m.groups[m.groupCursor]
 		s := m.s
+		var habitNames []string
+		for _, h := range m.habits {
+			if h.Habit.GroupID == g.ID {
+				habitNames = append(habitNames, h.Habit.Name)
+			}
+		}
 		return m.askConfirm(
 			"Delete group "+styleWarn.Render(g.Name)+"? Habits in it are kept (ungrouped).",
 			func() tea.Msg {
 				if err := s.DeleteGroup(g.ID); err != nil {
 					return errMsg{err}
 				}
-				return statusMsg("Group deleted: " + g.Name)
+				return groupDeletedMsg{group: g, habitNames: habitNames}
 			})
 	}
 	return m, nil
@@ -1327,6 +1393,19 @@ func (m model) handleChainMgr(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.chainFromName = ""
 		m.chainPickCursor = 0
 		m.state = viewChainPick
+	case "u":
+		if m.lastDeletedChain != nil {
+			ch := m.lastDeletedChain
+			m.lastDeletedChain = nil
+			m.message = ""
+			s := m.s
+			return m, func() tea.Msg {
+				if err := s.AddChain(ch.FromName, ch.ToName); err != nil {
+					return errMsg{err}
+				}
+				return statusMsg(fmt.Sprintf("Chain restored: %s → %s", ch.FromName, ch.ToName))
+			}
+		}
 	case "d":
 		if len(m.chains) == 0 {
 			break
@@ -1339,7 +1418,7 @@ func (m model) handleChainMgr(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				if err := s.DeleteChain(ch.ID); err != nil {
 					return errMsg{err}
 				}
-				return statusMsg("Chain deleted")
+				return chainDeletedMsg{chain: ch}
 			})
 	case "s":
 		// AI chain suggestions
@@ -2739,7 +2818,7 @@ func (m model) renderGroupMgr() string {
 		b.WriteString("\n")
 	}
 
-	b.WriteString(styleMuted.Render("a new · d delete · j/k navigate · esc back"))
+	b.WriteString(styleMuted.Render("a new · d delete · u undo · j/k navigate · esc back"))
 	return m.panel(b.String())
 }
 
@@ -3621,7 +3700,7 @@ func (m model) renderChainMgr() string {
 		}
 	}
 
-	b.WriteString("\n" + styleMuted.Render("a add · d delete · s AI suggestions · esc back"))
+	b.WriteString("\n" + styleMuted.Render("a add · d delete · u undo · s AI suggestions · esc back"))
 	return m.panel(b.String())
 }
 
@@ -3798,6 +3877,12 @@ func toggleHabitCheckinCmd(s *store.Store, habits []models.HabitStats, idx int) 
 func clearAfter() tea.Cmd {
 	return tea.Tick(3*time.Second, func(_ time.Time) tea.Msg {
 		return clearMsgMsg{}
+	})
+}
+
+func clearAfterUndo() tea.Cmd {
+	return tea.Tick(undoWindow, func(_ time.Time) tea.Msg {
+		return clearUndoMsg{}
 	})
 }
 
