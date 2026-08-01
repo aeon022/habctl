@@ -28,6 +28,16 @@ func DefaultPath() (string, error) {
 	return filepath.Join(home, ".local", "share", "habctl", "habits.db"), nil
 }
 
+// UIStatePath is where the TUI persists small preferences (week/month view,
+// compact toggle) — see missionctl-core/uistate.
+func UIStatePath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".local", "share", "habctl", "ui_state.json"), nil
+}
+
 // Open opens (or creates) the database at path.
 func Open(path string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

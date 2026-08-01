@@ -17,6 +17,7 @@ import (
 	"github.com/aeon022/habctl/internal/models"
 	"github.com/aeon022/habctl/internal/store"
 	"github.com/aeon022/missionctl-core/overlay"
+	"github.com/aeon022/missionctl-core/uistate"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -370,16 +371,41 @@ func Run(s *store.Store) error {
 	ti.CharLimit = 80
 
 	cfg, _ := config.Load()
-	m := model{s: s, input: ti, cfg: cfg, hoverRow: -1, lastClickRow: -1}
+
+	var state persistedState
+	if p, err := store.UIStatePath(); err == nil {
+		uistate.Load(p, &state)
+	}
+
+	m := model{s: s, input: ti, cfg: cfg, hoverRow: -1, lastClickRow: -1, weekView: state.WeekView, compact: state.Compact}
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseAllMotion(), tea.WithInput(os.Stdin), tea.WithOutput(os.Stdout))
 	_, err := p.Run()
 	return err
 }
 
+// persistedState is what Run restores from and saveUIState saves to — see
+// missionctl-core/uistate.
+type persistedState struct {
+	WeekView bool `json:"week_view"`
+	Compact  bool `json:"compact"`
+}
+
+func (m model) saveUIState() {
+	path, err := store.UIStatePath()
+	if err != nil {
+		return
+	}
+	_ = uistate.Save(path, persistedState{WeekView: m.weekView, Compact: m.compact})
+}
+
 // ── bubbletea interface ───────────────────────────────────────────────────────
 
 func (m model) Init() tea.Cmd {
-	return tea.Batch(loadHabits(m.s, 30), loadGroups(m.s), loadChains(m.s))
+	days := 30
+	if m.weekView {
+		days = 7
+	}
+	return tea.Batch(loadHabits(m.s, days), loadGroups(m.s), loadChains(m.s))
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -764,6 +790,7 @@ func (m model) handleList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "w":
 		m.weekView = !m.weekView
+		m.saveUIState()
 		days := 30
 		if m.weekView {
 			days = 7
@@ -772,6 +799,7 @@ func (m model) handleList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "v":
 		m.compact = !m.compact
+		m.saveUIState()
 
 	case "V":
 		if len(m.habits) == 0 {
