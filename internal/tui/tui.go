@@ -169,6 +169,11 @@ const (
 	viewCommand     // ":" command palette
 )
 
+// doubleClickWindow opens the habit detail view on a second click within
+// this window, same pattern and duration taskctl uses for its own
+// double-click.
+const doubleClickWindow = 400 * time.Millisecond
+
 // ── messages ─────────────────────────────────────────────────────────────────
 
 type suggestChunkResult struct {
@@ -238,18 +243,20 @@ type archiveReloadMsg struct{ status string }
 // ── model ────────────────────────────────────────────────────────────────────
 
 type model struct {
-	habits   []models.HabitStats
-	groups   []models.Group
-	chains   []models.Chain
-	cursor   int
-	hoverRow int // m.habits index under the mouse cursor, -1 when none
-	state    viewState
-	input    textinput.Model
-	s        *store.Store
-	message  string
-	isErr    bool
-	weekView bool
-	height   int
+	habits       []models.HabitStats
+	groups       []models.Group
+	chains       []models.Chain
+	cursor       int
+	hoverRow     int // m.habits index under the mouse cursor, -1 when none
+	lastClickRow int // m.habits index of the previous left-click, -1 when none — double-click opens the habit detail view, same window/pattern taskctl uses
+	lastClickAt  time.Time
+	state        viewState
+	input        textinput.Model
+	s            *store.Store
+	message      string
+	isErr        bool
+	weekView     bool
+	height       int
 
 	suggestText   string
 	suggestDone   bool
@@ -341,7 +348,7 @@ func Run(s *store.Store) error {
 	ti.CharLimit = 80
 
 	cfg, _ := config.Load()
-	m := model{s: s, input: ti, cfg: cfg, hoverRow: -1}
+	m := model{s: s, input: ti, cfg: cfg, hoverRow: -1, lastClickRow: -1}
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseAllMotion(), tea.WithInput(os.Stdin), tea.WithOutput(os.Stdout))
 	_, err := p.Run()
 	return err
@@ -376,7 +383,26 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			if i := m.rowHitTest(msg.Y); i >= 0 {
+				now := time.Now()
+				if i == m.lastClickRow && now.Sub(m.lastClickAt) < doubleClickWindow {
+					m.cursor = i
+					m.lastClickRow = -1 // consumed, so a third click starts fresh
+					m.state = viewHabitDetail
+					name := m.habits[i].Habit.Name
+					return m, loadRecentNotes(m.s, name)
+				}
 				m.cursor = i
+				m.lastClickRow = i
+				m.lastClickAt = now
+			}
+		case tea.MouseButtonRight:
+			if msg.Action != tea.MouseActionPress || m.state != viewList {
+				return m, nil
+			}
+			// Toggle check-in on whatever row was clicked, not the cursor
+			// row — a quick-action shouldn't require selecting first.
+			if i := m.rowHitTest(msg.Y); i >= 0 {
+				return m, toggleHabitCheckinCmd(m.s, m.habits, i)
 			}
 		case tea.MouseButtonNone:
 			if msg.Action == tea.MouseActionMotion && m.state == viewList {
@@ -637,39 +663,7 @@ func (m model) handleList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if len(m.habits) == 0 {
 			break
 		}
-		h := m.habits[m.cursor]
-		name := h.Habit.Name
-		chainTo := h.ChainTo
-		chainToDone := isHabitDoneToday(m.habits, chainTo)
-		s := m.s
-		if h.CheckedToday {
-			return m, func() tea.Msg {
-				if err := s.DeleteCheckIn(name, time.Now()); err != nil {
-					return errMsg{err}
-				}
-				return statusMsg("✗ " + name + " unchecked")
-			}
-		}
-		return m, func() tea.Msg {
-			if err := s.CheckIn(name, time.Now()); err != nil {
-				return errMsg{err}
-			}
-			stats, err := s.GetStats(name, 30)
-			if err != nil {
-				return statusMsg(fmt.Sprintf("✓ %s", name))
-			}
-			out := fmt.Sprintf("✓ %s (streak: %d)", name, stats.Streak)
-			if stats.Streak >= 7 {
-				out += " 🔥"
-			}
-			if ms := streakMilestone(stats.Streak); ms != "" {
-				out += "  " + ms
-			}
-			if chainTo != "" && !chainToDone {
-				out += "  →  " + chainTo + "?"
-			}
-			return statusMsg(out)
-		}
+		return m, toggleHabitCheckinCmd(m.s, m.habits, m.cursor)
 
 	case "enter":
 		if len(m.habits) == 0 {
@@ -3756,6 +3750,48 @@ func waitForChunk(ch <-chan suggestChunkResult) tea.Cmd {
 			return suggestDoneMsg{r.gen}
 		}
 		return suggestChunkMsg{r.text, r.gen}
+	}
+}
+
+// toggleHabitCheckinCmd checks or unchecks habits[idx] for today — shared by
+// the "space" key (acts on the cursor row) and right-click (acts on
+// whatever row was clicked, per taskctl's "quick-action shouldn't require
+// selecting first" convention).
+func toggleHabitCheckinCmd(s *store.Store, habits []models.HabitStats, idx int) tea.Cmd {
+	if idx < 0 || idx >= len(habits) {
+		return nil
+	}
+	h := habits[idx]
+	name := h.Habit.Name
+	chainTo := h.ChainTo
+	chainToDone := isHabitDoneToday(habits, chainTo)
+	if h.CheckedToday {
+		return func() tea.Msg {
+			if err := s.DeleteCheckIn(name, time.Now()); err != nil {
+				return errMsg{err}
+			}
+			return statusMsg("✗ " + name + " unchecked")
+		}
+	}
+	return func() tea.Msg {
+		if err := s.CheckIn(name, time.Now()); err != nil {
+			return errMsg{err}
+		}
+		stats, err := s.GetStats(name, 30)
+		if err != nil {
+			return statusMsg(fmt.Sprintf("✓ %s", name))
+		}
+		out := fmt.Sprintf("✓ %s (streak: %d)", name, stats.Streak)
+		if stats.Streak >= 7 {
+			out += " 🔥"
+		}
+		if ms := streakMilestone(stats.Streak); ms != "" {
+			out += "  " + ms
+		}
+		if chainTo != "" && !chainToDone {
+			out += "  →  " + chainTo + "?"
+		}
+		return statusMsg(out)
 	}
 }
 
