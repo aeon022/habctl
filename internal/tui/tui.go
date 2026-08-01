@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"os/exec"
 	"sort"
 	"strings"
 	"time"
@@ -852,6 +853,13 @@ func (m model) handleList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.input.Focus()
 		m.addingName = ""
 		m.addingIcon = ""
+
+	case "y":
+		if len(m.habits) == 0 {
+			break
+		}
+		m.message = "Copied to clipboard"
+		return m, tea.Batch(copyToClipboardCmd(m.habits[m.cursor].Habit.Name), clearAfter())
 
 	case "e":
 		if len(m.habits) == 0 {
@@ -2485,6 +2493,7 @@ func (m model) renderList() string {
 		fk("↵", "open") + styleMuted.Render("  ") +
 		fk("n", "new") + styleMuted.Render("  ") +
 		fk("e", "edit") + styleMuted.Render("  ") +
+		fk("y", "copy") + styleMuted.Render("  ") +
 		fk("s", "AI") + styleMuted.Render("  ") +
 		fk("r", "review") + styleMuted.Render("  ") +
 		styleLime.Render(":") + styleMuted.Render("cmd") + styleMuted.Render("  ") + // the key IS ":" — fk() would double it into "::cmd"
@@ -3754,6 +3763,18 @@ func clearAfter() tea.Cmd {
 	return tea.Tick(3*time.Second, func(_ time.Time) tea.Msg {
 		return clearMsgMsg{}
 	})
+}
+
+// copyToClipboardCmd shells out to pbcopy — same approach taskctl/mailctl/
+// notectl/calctl use for their own "y" copy shortcuts, no clipboard
+// library needed.
+func copyToClipboardCmd(text string) tea.Cmd {
+	return func() tea.Msg {
+		cmd := exec.Command("pbcopy")
+		cmd.Stdin = strings.NewReader(text)
+		_ = cmd.Run()
+		return nil
+	}
 }
 
 // ── util ─────────────────────────────────────────────────────────────────────
