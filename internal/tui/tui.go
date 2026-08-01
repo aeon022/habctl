@@ -612,6 +612,16 @@ func (m model) handleList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.cursor = 0
 		}
 
+	case "1", "2", "3", "4", "5", "6", "7", "8", "9":
+		// jump to the nth visible (on-screen) habit — mirrors
+		// visibleHabitsWithStart/habitWindowHeight, the same window
+		// rowHitTest and the main render loop already use.
+		n := int(msg.String()[0] - '0')
+		visible, start := m.visibleHabitsWithStart(m.habitWindowHeight())
+		if n <= len(visible) {
+			m.cursor = start + n - 1
+		}
+
 	case "j", "down":
 		if m.cursor < len(m.habits)-1 {
 			m.cursor++
