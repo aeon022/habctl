@@ -30,6 +30,7 @@ var (
 	colorMuted  = lipgloss.AdaptiveColor{Light: "#64748b", Dark: "#718096"}
 	colorOk     = lipgloss.AdaptiveColor{Light: "#16a34a", Dark: "#4ade80"}
 	colorWarn   = lipgloss.AdaptiveColor{Light: "#d97706", Dark: "#fbbf24"}
+	colorDanger = lipgloss.AdaptiveColor{Light: "#dc2626", Dark: "#f87171"}
 	colorFg     = lipgloss.AdaptiveColor{Light: "#1e293b", Dark: "#e2e8f0"}
 	colorBorder = lipgloss.AdaptiveColor{Light: "#cbd5e1", Dark: "#1e1e2e"}
 	colorGroup  = lipgloss.AdaptiveColor{Light: "#0ea5e9", Dark: "#38bdf8"}
@@ -46,6 +47,7 @@ var (
 	styleOkBold = lipgloss.NewStyle().Foreground(colorOk).Bold(true)
 	styleWarn   = lipgloss.NewStyle().Foreground(colorWarn)
 	styleWarnBd = lipgloss.NewStyle().Foreground(colorWarn).Bold(true)
+	styleDanger = lipgloss.NewStyle().Foreground(colorDanger)
 	styleFg     = lipgloss.NewStyle().Foreground(colorFg)
 	styleGroup  = lipgloss.NewStyle().Foreground(colorGroup).Bold(true)
 	styleHover  = lipgloss.NewStyle().Foreground(colorHover)
@@ -2285,7 +2287,7 @@ func (m model) renderList() string {
 		if m.filterQ != "" || m.state == viewFilterInput {
 			b.WriteString(styleMuted.Render("No habits match the filter.") + "\n")
 		} else {
-			b.WriteString(styleMuted.Render("No habits yet. n to add one.") + "\n")
+			b.WriteString(styleMuted.Render("No habits yet — press n to add one.") + "\n")
 		}
 	} else {
 		const cbW = 4   // "[✓] "
@@ -2461,13 +2463,13 @@ func (m model) renderList() string {
 	if m.message != "" {
 		msgStyle := styleOk
 		if m.isErr {
-			msgStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
+			msgStyle = styleDanger
 		}
 		b.WriteString(msgStyle.Render(m.message) + "\n\n")
 	}
 
 	fk := func(key, label string) string {
-		return styleMuted.Render("[") + styleLime.Render(key) + styleMuted.Render("] "+label)
+		return styleLime.Render(key) + styleMuted.Render(":"+label)
 	}
 	footer := fk("space", "✓/✗") + styleMuted.Render("  ") +
 		fk("↵", "open") + styleMuted.Render("  ") +
@@ -2475,7 +2477,7 @@ func (m model) renderList() string {
 		fk("e", "edit") + styleMuted.Render("  ") +
 		fk("s", "AI") + styleMuted.Render("  ") +
 		fk("r", "review") + styleMuted.Render("  ") +
-		fk(":", "cmd") + styleMuted.Render("  ") +
+		styleLime.Render(":") + styleMuted.Render("cmd") + styleMuted.Render("  ") + // the key IS ":" — fk() would double it into "::cmd"
 		fk("?", "help") + styleMuted.Render("  ") +
 		fk("q", "quit")
 	b.WriteString(footer)
@@ -2698,7 +2700,7 @@ func (m model) renderGroupMgr() string {
 	b.WriteString(sectionHeader("Groups") + "\n\n")
 
 	if len(m.groups) == 0 {
-		b.WriteString(styleMuted.Render("No groups yet. a to create one.") + "\n\n")
+		b.WriteString(styleMuted.Render("No groups yet — press a to create one.") + "\n\n")
 	} else {
 		for i, g := range m.groups {
 			cursor := "  "
@@ -3564,7 +3566,7 @@ func (m model) renderArchive() string {
 	if m.message != "" {
 		msgStyle := styleOk
 		if m.isErr {
-			msgStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
+			msgStyle = styleDanger
 		}
 		b.WriteString(msgStyle.Render(m.message) + "\n\n")
 	}
@@ -3593,7 +3595,7 @@ func (m model) renderChainMgr() string {
 	b.WriteString(styleMuted.Render("After habit A, do habit B next.") + "\n\n")
 
 	if len(m.chains) == 0 {
-		b.WriteString(styleMuted.Render("No chains yet. a to add, s for AI suggestions.") + "\n")
+		b.WriteString(styleMuted.Render("No chains yet — press a to add, s for AI suggestions.") + "\n")
 	} else {
 		for i, ch := range m.chains {
 			cursor := "  "
