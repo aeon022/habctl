@@ -260,13 +260,19 @@ type model struct {
 	hoverRow     int // m.habits index under the mouse cursor, -1 when none
 	lastClickRow int // m.habits index of the previous left-click, -1 when none — double-click opens the habit detail view, same window/pattern taskctl uses
 	lastClickAt  time.Time
-	state        viewState
-	input        textinput.Model
-	s            *store.Store
-	message      string
-	isErr        bool
-	weekView     bool
-	height       int
+	// batch select mode ("V") — bulk-archive, same pattern taskctl's own
+	// select mode uses. Named batchSelected/batchMode (not "selected") to
+	// avoid colliding with the existing per-row "is this the cursor row"
+	// meaning of `selected` used throughout the render code.
+	batchMode     bool
+	batchSelected map[string]bool // keyed by habit name
+	state         viewState
+	input         textinput.Model
+	s             *store.Store
+	message       string
+	isErr         bool
+	weekView      bool
+	height        int
 
 	suggestText   string
 	suggestDone   bool
@@ -652,6 +658,48 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // ── key handlers ─────────────────────────────────────────────────────────────
 
 func (m model) handleList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.batchMode {
+		switch msg.String() {
+		case "esc":
+			m.batchMode = false
+			m.batchSelected = nil
+		case "up", "k":
+			if m.cursor > 0 {
+				m.cursor--
+			}
+		case "down", "j":
+			if m.cursor < len(m.habits)-1 {
+				m.cursor++
+			}
+		case " ":
+			if len(m.habits) == 0 {
+				break
+			}
+			name := m.habits[m.cursor].Habit.Name
+			if m.batchSelected[name] {
+				delete(m.batchSelected, name)
+			} else {
+				m.batchSelected[name] = true
+			}
+		case "A":
+			for _, h := range m.habits {
+				m.batchSelected[h.Habit.Name] = true
+			}
+		case "enter":
+			if len(m.batchSelected) == 0 {
+				break
+			}
+			names := make([]string, 0, len(m.batchSelected))
+			for n := range m.batchSelected {
+				names = append(names, n)
+			}
+			m.batchMode = false
+			m.batchSelected = nil
+			return m, batchArchiveCmd(m.s, names)
+		}
+		return m, nil
+	}
+
 	switch msg.String() {
 	case "q", "ctrl+c":
 		return m, tea.Quit
@@ -724,6 +772,14 @@ func (m model) handleList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "v":
 		m.compact = !m.compact
+
+	case "V":
+		if len(m.habits) == 0 {
+			break
+		}
+		m.batchMode = true
+		m.batchSelected = map[string]bool{m.habits[m.cursor].Habit.Name: true}
+		return m, nil
 
 	case "a":
 		if len(m.habits) == 0 {
@@ -2370,6 +2426,10 @@ func (m model) renderList() string {
 	if cmdLine != "" {
 		b.WriteString(cmdLine)
 	}
+	if m.batchMode {
+		b.WriteString("  " + styleLime.Render(fmt.Sprintf("select: %d", len(m.batchSelected))) +
+			styleMuted.Render("  space toggle  A all  enter archive  esc cancel") + "\n")
+	}
 	b.WriteString("\n")
 
 	// ── habit list ────────────────────────────────────────────────────────────
@@ -2452,6 +2512,12 @@ func (m model) renderList() string {
 			var cb string
 			var ns lipgloss.Style
 			switch {
+			case m.batchMode && m.batchSelected[h.Habit.Name]:
+				cb = styleLime.Render("[x]") + " "
+				ns = lipgloss.NewStyle().Foreground(colorFg).Bold(true)
+			case m.batchMode:
+				cb = styleMuted.Render("[ ]") + " "
+				ns = styleMuted
 			case selected && h.CheckedToday:
 				cb = styleLime.Render("[✓]") + " "
 				ns = lipgloss.NewStyle().Foreground(colorFg).Bold(true)
@@ -3871,6 +3937,19 @@ func toggleHabitCheckinCmd(s *store.Store, habits []models.HabitStats, idx int) 
 			out += "  →  " + chainTo + "?"
 		}
 		return statusMsg(out)
+	}
+}
+
+// batchArchiveCmd archives every named habit — the batch-mode ("V") version
+// of the single-habit "a" archive key. Returning statusMsg reuses the
+// existing reload-on-status convention (see the statusMsg case in Update),
+// same as every other single-habit mutation in this file.
+func batchArchiveCmd(s *store.Store, names []string) tea.Cmd {
+	return func() tea.Msg {
+		for _, n := range names {
+			_ = s.ArchiveHabit(n)
+		}
+		return statusMsg(fmt.Sprintf("Archived %d habit(s)", len(names)))
 	}
 }
 
