@@ -168,6 +168,7 @@ const (
 	viewConfirm     // confirmation prompt before a destructive action
 	viewFilterInput // "/" filter over the habit list
 	viewCommand     // ":" command palette
+	viewPresets     // "p" curated habit template picker
 )
 
 // doubleClickWindow opens the habit detail view on a second click within
@@ -357,6 +358,9 @@ type model struct {
 	// archive view
 	archivedHabits []models.Habit
 	archiveCursor  int
+
+	// preset picker ("p")
+	presetCursor int
 
 	cfg     config.Config
 	calData store.CalendarData
@@ -660,6 +664,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleFilterInput(msg)
 		case viewCommand:
 			return m.handleCommandPalette(msg)
+		case viewPresets:
+			return m.handlePresets(msg)
 		case viewOAuthWait:
 			if msg.String() == "ctrl+c" {
 				return m, tea.Quit
@@ -972,6 +978,10 @@ func (m model) handleList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.input.Focus()
 		m.addingName = ""
 		m.addingIcon = ""
+
+	case "p":
+		m.presetCursor = 0
+		m.state = viewPresets
 
 	case "y":
 		if len(m.habits) == 0 {
@@ -1830,6 +1840,58 @@ func (m model) handleArchive(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// habitPreset is one curated, ready-to-add habit template.
+type habitPreset struct {
+	Icon string
+	Name string
+	Desc string
+}
+
+// habitPresets is a small curated starter list — common habits people
+// track, for a zero-wait alternative to the AI-powered "s" suggest flow.
+var habitPresets = []habitPreset{
+	{"💧", "Drink water", "8 glasses a day"},
+	{"🏃", "Exercise", "Any movement counts"},
+	{"📖", "Read", "Even just a few pages"},
+	{"🧘", "Meditate", "5-10 minutes of stillness"},
+	{"😴", "Sleep 8 hours", "Consistent bedtime"},
+	{"📵", "No phone before bed", "Screen off an hour before sleep"},
+	{"✍️", "Journal", "A few sentences about the day"},
+	{"🥗", "Eat vegetables", "At least one serving"},
+	{"🚶", "Walk 10k steps", "Track with your phone or watch"},
+	{"🙏", "Gratitude practice", "Note one thing you're grateful for"},
+	{"🧹", "Tidy up", "10 minutes of cleaning"},
+	{"💰", "Track spending", "Log today's expenses"},
+}
+
+func (m model) handlePresets(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+	case "esc", "q":
+		m.state = viewList
+	case "j", "down":
+		if m.presetCursor < len(habitPresets)-1 {
+			m.presetCursor++
+		}
+	case "k", "up":
+		if m.presetCursor > 0 {
+			m.presetCursor--
+		}
+	case "enter":
+		p := habitPresets[m.presetCursor]
+		s := m.s
+		m.state = viewList
+		return m, func() tea.Msg {
+			if _, err := s.AddHabit(p.Name, p.Desc, p.Icon); err != nil {
+				return errMsg{err}
+			}
+			return statusMsg("+ " + p.Name)
+		}
+	}
+	return m, nil
+}
+
 func (m model) handleGoalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
@@ -2277,6 +2339,8 @@ func (m model) View() string {
 		return m.renderOAuthWait()
 	case viewArchive:
 		return m.renderArchive()
+	case viewPresets:
+		return m.renderPresets()
 	case viewGoalInput:
 		return m.renderGoalInput()
 	case viewConfirm:
@@ -3469,6 +3533,7 @@ func (m model) helpContent() string {
 	b.WriteString(row("enter", "open habit (detail, description, note history)"))
 	b.WriteString(row("N", "add note to today's check-in"))
 	b.WriteString(row("n", "new habit (optional emoji prefix)"))
+	b.WriteString(row("p", "add from a curated habit template list"))
 	b.WriteString(row("e", "edit habit (name, desc, frequency, skip)"))
 	b.WriteString(row("a", "archive habit (history preserved)"))
 	b.WriteString(row("A", "open archive (restore / delete)"))
@@ -3758,6 +3823,26 @@ func (m model) renderArchive() string {
 	}
 
 	b.WriteString(styleMuted.Render("r restore · d delete permanently · j/k navigate · esc back"))
+	return m.panel(b.String())
+}
+
+func (m model) renderPresets() string {
+	var b strings.Builder
+	b.WriteString(sectionHeader("Habit Templates") + "\n")
+	b.WriteString(styleMuted.Render("A curated starter list — pick one to add it instantly.") + "\n\n")
+
+	for i, p := range habitPresets {
+		cursor := "  "
+		ns := styleMuted
+		if i == m.presetCursor {
+			cursor = styleLime.Render("▶ ")
+			ns = styleFg
+		}
+		b.WriteString(cursor + ns.Render(p.Icon+" "+p.Name) + "\n")
+		b.WriteString("      " + styleMuted.Render(p.Desc) + "\n")
+	}
+	b.WriteString("\n")
+	b.WriteString(styleMuted.Render("enter add · j/k navigate · esc back"))
 	return m.panel(b.String())
 }
 
