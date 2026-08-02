@@ -117,6 +117,16 @@ Example prompts for Claude:
 
 Everything lives in a local SQLite database at `~/.local/share/habctl/habits.db`. No cloud, no account, no telemetry. AI provider settings are stored in `~/.config/habctl/config.json`.
 
+### Syncing across devices
+
+To share your habit data across devices, set `HABCTL_DATA_DIR` to a folder you already sync yourself — iCloud Drive, Dropbox, Syncthing, etc. (habctl has no config-file setting for this, only the env var):
+
+```bash
+export HABCTL_DATA_DIR="$HOME/Library/Mobile Documents/com~apple~CloudDocs/habctl"
+```
+
+Once set, habctl automatically switches its SQLite journal mode from WAL to rollback-journal — WAL splits the database across multiple files that a folder-sync client can't update atomically together, so this switch keeps the directory down to a single consistent file whenever habctl isn't actively writing. A same-machine lock also prevents two habctl processes from opening the database at once (run `habctl doctor` to see the current mode and path). This only protects against the same-machine and stale-snapshot failure modes, not two machines editing at the exact same instant; an undownloaded iCloud file is reported explicitly rather than as a bare error.
+
 ## Part of missionctl
 
 habctl is one tool in the [missionctl](https://github.com/aeon022/missionctl) suite — local-first terminal tools that give AI hands: mailctl, calctl, taskctl, notectl, budgetctl, habctl, timectl, diaryctl, postctl.
