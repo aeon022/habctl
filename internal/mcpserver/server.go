@@ -566,11 +566,11 @@ var dbPathOverride string
 
 func openStore() (*store.Store, error) {
 	if dbPathOverride != "" {
-		return store.Open(dbPathOverride)
+		return store.Open(dbPathOverride, false)
 	}
-	path, err := store.DefaultPath()
+	path, shared, err := store.ResolveDBPath()
 	if err != nil {
 		return nil, fmt.Errorf("resolve db path: %w", err)
 	}
-	return store.Open(path)
+	return store.Open(path, shared)
 }

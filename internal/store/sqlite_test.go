@@ -8,7 +8,7 @@ import (
 
 func testStore(t *testing.T) *Store {
 	t.Helper()
-	s, err := Open(filepath.Join(t.TempDir(), "habits.db"))
+	s, err := Open(filepath.Join(t.TempDir(), "habits.db"), false)
 	if err != nil {
 		t.Fatal(err)
 	}

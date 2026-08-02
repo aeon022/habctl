@@ -19,7 +19,7 @@ func setupTestDB(t *testing.T) {
 	dbPathOverride = path
 	t.Cleanup(func() { dbPathOverride = "" })
 
-	s, err := store.Open(path)
+	s, err := store.Open(path, false)
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}

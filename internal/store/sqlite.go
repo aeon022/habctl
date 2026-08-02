@@ -2,12 +2,16 @@ package store
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/aeon022/habctl/internal/models"
+	coreconfig "github.com/aeon022/missionctl-core/config"
+	"github.com/aeon022/missionctl-core/syncdir"
 	_ "modernc.org/sqlite"
 )
 
@@ -16,7 +20,8 @@ const tsLayout = time.RFC3339Nano
 
 // Store wraps the SQLite database.
 type Store struct {
-	db *sql.DB
+	db   *sql.DB
+	path string
 }
 
 // DefaultPath returns the canonical path to the database file.
@@ -26,6 +31,21 @@ func DefaultPath() (string, error) {
 		return "", err
 	}
 	return filepath.Join(home, ".local", "share", "habctl", "habits.db"), nil
+}
+
+// ResolveDBPath returns the database file path, and whether it's a
+// user-configured (possibly folder-synced) directory rather than the
+// private default — set via the HABCTL_DATA_DIR env var, e.g. pointing
+// inside iCloud Drive or Dropbox. habctl has no config-file layer for
+// this one setting, so an env var is the only override, deliberately
+// minimal rather than introducing a whole new config file for it.
+func ResolveDBPath() (path string, shared bool, err error) {
+	if dir := os.Getenv("HABCTL_DATA_DIR"); dir != "" {
+		resolved, sh := coreconfig.ResolveDir("habctl", dir)
+		return filepath.Join(resolved, "habits.db"), sh, nil
+	}
+	p, err := DefaultPath()
+	return p, false, err
 }
 
 // UIStatePath is where the TUI persists small preferences (week/month view,
@@ -38,18 +58,81 @@ func UIStatePath() (string, error) {
 	return filepath.Join(home, ".local", "share", "habctl", "ui_state.json"), nil
 }
 
-// Open opens (or creates) the database at path.
-func Open(path string) (*Store, error) {
+// habctl opens a fresh *Store per operation rather than holding one open
+// for the process's lifetime, and flock(2) isn't reentrant within a
+// process — locks reference-counts the real OS-level lock per path so the
+// same process's own concurrent/sequential opens don't conflict with
+// themselves; only the first open of a path acquires it for real, and only
+// the last matching Close() releases it. A conflict is reported only when
+// a genuinely different process holds it.
+var (
+	lockMu sync.Mutex
+	locks  = map[string]*lockEntry{}
+)
+
+type lockEntry struct {
+	lock  *syncdir.Lock
+	count int
+}
+
+func acquireLock(path string) error {
+	lockMu.Lock()
+	defer lockMu.Unlock()
+	e, ok := locks[path]
+	if !ok {
+		l, err := syncdir.Acquire(path)
+		if err != nil {
+			return err
+		}
+		e = &lockEntry{lock: l}
+		locks[path] = e
+	}
+	e.count++
+	return nil
+}
+
+func releaseLock(path string) {
+	lockMu.Lock()
+	defer lockMu.Unlock()
+	e, ok := locks[path]
+	if !ok {
+		return
+	}
+	e.count--
+	if e.count == 0 {
+		e.lock.Release()
+		delete(locks, path)
+	}
+}
+
+// Open opens (or creates) the database at path. shared must reflect
+// whether path is a user-configured (possibly folder-synced) directory
+// rather than the private default — see ResolveDBPath.
+func Open(path string, shared bool) (*Store, error) {
+	if isPlaceholder, placeholder := syncdir.ICloudPlaceholder(path); isPlaceholder {
+		return nil, fmt.Errorf("%s hasn't finished downloading from iCloud yet (found %s) — open Finder and download it, or disable \"Optimize Mac Storage\" for this folder", path, placeholder)
+	}
+
+	if err := acquireLock(path); err != nil {
+		if errors.Is(err, syncdir.ErrLocked) {
+			return nil, fmt.Errorf("habctl is already running elsewhere, or a previous session crashed — remove %s.lock if you're sure nothing else is using it", path)
+		}
+		return nil, err
+	}
+
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		releaseLock(path)
 		return nil, fmt.Errorf("create data dir: %w", err)
 	}
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
+		releaseLock(path)
 		return nil, fmt.Errorf("open db: %w", err)
 	}
-	s := &Store{db: db}
-	if err := s.init(); err != nil {
+	s := &Store{db: db, path: path}
+	if err := s.init(shared); err != nil {
 		_ = db.Close()
+		releaseLock(path)
 		return nil, err
 	}
 	return s, nil
@@ -57,14 +140,17 @@ func Open(path string) (*Store, error) {
 
 // Close releases the database connection.
 func (s *Store) Close() error {
-	return s.db.Close()
+	err := s.db.Close()
+	releaseLock(s.path)
+	return err
 }
 
-func (s *Store) init() error {
+func (s *Store) init(shared bool) error {
 	for _, p := range []string{
-		"PRAGMA journal_mode=WAL;",
+		"PRAGMA journal_mode=" + syncdir.JournalMode(shared) + ";",
 		"PRAGMA foreign_keys=ON;",
 		"PRAGMA synchronous=NORMAL;",
+		"PRAGMA busy_timeout=5000;",
 	} {
 		if _, err := s.db.Exec(p); err != nil {
 			return fmt.Errorf("pragma: %w", err)
