@@ -569,6 +569,34 @@ func (s *Store) GetCalendarData(weeks int) (CalendarData, error) {
 	return CalendarData{ByDate: byDate, TotalHabits: total}, rows.Err()
 }
 
+// GetCheckinDatesByHabit returns, for the past `weeks` weeks, the set of
+// dates each habit (by id) was checked — the raw per-habit data
+// GetCalendarData's per-day totals can't reconstruct, needed for computing
+// which habits tend to happen together.
+func (s *Store) GetCheckinDatesByHabit(weeks int) (map[int64]map[string]bool, error) {
+	since := truncateToDay(time.Now()).AddDate(0, 0, -weeks*7)
+	rows, err := s.db.Query(`
+		SELECT habit_id, date FROM checkins WHERE date >= ?
+	`, since.Format(dateLayout))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[int64]map[string]bool)
+	for rows.Next() {
+		var id int64
+		var d string
+		if err := rows.Scan(&id, &d); err != nil {
+			return nil, err
+		}
+		if out[id] == nil {
+			out[id] = make(map[string]bool)
+		}
+		out[id][d] = true
+	}
+	return out, rows.Err()
+}
+
 // ── groups ───────────────────────────────────────────────────────────────────
 
 // AddGroup creates a new group.

@@ -153,6 +153,48 @@ func TestFilterHabits_EmptyQueryReturnsAll(t *testing.T) {
 	}
 }
 
+func TestTopHabitCorrelations_RanksByCoOccurrence(t *testing.T) {
+	habits := []models.HabitStats{
+		{Habit: models.Habit{ID: 1, Name: "Run"}},
+		{Habit: models.Habit{ID: 2, Name: "Stretch"}},
+		{Habit: models.Habit{ID: 3, Name: "Read"}},
+	}
+	// Run and Stretch happen on the exact same 5 days (100% overlap).
+	// Read happens on 5 different days entirely (0% overlap with either).
+	dates := map[int64]map[string]bool{
+		1: {"d1": true, "d2": true, "d3": true, "d4": true, "d5": true},
+		2: {"d1": true, "d2": true, "d3": true, "d4": true, "d5": true},
+		3: {"d6": true, "d7": true, "d8": true, "d9": true, "d10": true},
+	}
+	got := topHabitCorrelations(habits, dates, 3)
+	if len(got) == 0 {
+		t.Fatal("expected at least one pair")
+	}
+	top := got[0]
+	if top.jaccard != 1.0 {
+		t.Errorf("expected Run+Stretch to have 100%% co-occurrence, got %.2f (%q/%q)", top.jaccard, top.nameA, top.nameB)
+	}
+	if !(top.nameA == "Run" && top.nameB == "Stretch") {
+		t.Errorf("expected top pair to be Run/Stretch, got %s/%s", top.nameA, top.nameB)
+	}
+}
+
+func TestTopHabitCorrelations_SkipsPairsWithTooLittleSharedHistory(t *testing.T) {
+	habits := []models.HabitStats{
+		{Habit: models.Habit{ID: 1, Name: "A"}},
+		{Habit: models.Habit{ID: 2, Name: "B"}},
+	}
+	// Only 2 total distinct days between them — below the 5-day floor meant
+	// to avoid a misleading 100% from too little data.
+	dates := map[int64]map[string]bool{
+		1: {"d1": true},
+		2: {"d1": true, "d2": true},
+	}
+	if got := topHabitCorrelations(habits, dates, 3); len(got) != 0 {
+		t.Errorf("expected no pairs with only 2 days of shared history, got %+v", got)
+	}
+}
+
 func TestFuzzyMatchIndexes(t *testing.T) {
 	idx := fuzzyMatchIndexes("run", "Morning Run")
 	if len(idx) != 3 {

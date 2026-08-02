@@ -362,9 +362,10 @@ type model struct {
 	// preset picker ("p")
 	presetCursor int
 
-	cfg     config.Config
-	calData store.CalendarData
-	width   int
+	cfg          config.Config
+	calData      store.CalendarData
+	checkinDates map[int64]map[string]bool // habit id -> set of dates checked, for correlation insights
+	width        int
 }
 
 // ── entry point ──────────────────────────────────────────────────────────────
@@ -964,9 +965,12 @@ func (m model) handleList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.chainCursor = 0
 
 	case "t":
-		cal, err := m.s.GetCalendarData(26)
+		cal, err := m.s.GetCalendarData(52)
 		if err == nil {
 			m.calData = cal
+		}
+		if dates, err := m.s.GetCheckinDatesByHabit(52); err == nil {
+			m.checkinDates = dates
 		}
 		m.state = viewStats
 
@@ -3099,8 +3103,17 @@ func (m model) renderStats() string {
 	}
 
 	// ── heatmap ──────────────────────────────────────────────────────────────
-	const weeks = 26
-	b.WriteString("\n" + styleMuted.Render("// contributions (26 weeks)") + "\n")
+	// As many weeks as the panel width allows, up to a full year (52) — 2
+	// chars/week + a 3-char day-label gutter, same math as innerWidth uses
+	// elsewhere. Narrow terminals degrade gracefully instead of wrapping.
+	weeks := (m.innerWidth() - 3) / 2
+	if weeks > 52 {
+		weeks = 52
+	}
+	if weeks < 8 {
+		weeks = 8
+	}
+	b.WriteString("\n" + styleMuted.Render(fmt.Sprintf("// contributions (%d weeks)", weeks)) + "\n")
 
 	wd := int(today.Weekday())
 	daysFromMon := (wd + 6) % 7
@@ -3199,8 +3212,74 @@ func (m model) renderStats() string {
 			styleMuted.Render(fmt.Sprintf("%3.0f%%", pct*100))))
 	}
 
+	// ── correlations ─────────────────────────────────────────────────────────
+	if pairs := topHabitCorrelations(m.habits, m.checkinDates, 3); len(pairs) > 0 {
+		b.WriteString("\n" + styleMuted.Render("// tend to happen together") + "\n")
+		for _, p := range pairs {
+			b.WriteString(fmt.Sprintf("  %s %s %s %s\n",
+				numV.Render(fmt.Sprintf("%.0f%%", p.jaccard*100)),
+				lbl.Render("of the time"),
+				lbl.Render(truncate(p.nameA, 20)+" +"),
+				lbl.Render(truncate(p.nameB, 20)),
+			))
+		}
+	}
+
 	b.WriteString("\n" + styleMuted.Render("esc back"))
 	return m.panel(b.String())
+}
+
+// habitPair is one habit-correlation result: how often habits A and B were
+// both checked on the same day, out of every day either one was.
+type habitPair struct {
+	nameA, nameB string
+	jaccard      float64
+}
+
+// topHabitCorrelations ranks every pair of active habits by co-occurrence
+// rate (Jaccard similarity of their checked-date sets) and returns the top
+// n. Pairs with too little shared history to mean anything (fewer than 5
+// days where at least one of the two was checked) are excluded — otherwise
+// two habits each checked once, on the same day, would misleadingly show
+// 100%.
+func topHabitCorrelations(habits []models.HabitStats, checkinDates map[int64]map[string]bool, n int) []habitPair {
+	var active []models.HabitStats
+	for _, h := range habits {
+		if !h.Habit.Archived && len(checkinDates[h.Habit.ID]) > 0 {
+			active = append(active, h)
+		}
+	}
+	var pairs []habitPair
+	for i := 0; i < len(active); i++ {
+		for j := i + 1; j < len(active); j++ {
+			a, bb := checkinDates[active[i].Habit.ID], checkinDates[active[j].Habit.ID]
+			shared, union := 0, 0
+			for d := range a {
+				union++
+				if bb[d] {
+					shared++
+				}
+			}
+			for d := range bb {
+				if !a[d] {
+					union++
+				}
+			}
+			if union < 5 {
+				continue
+			}
+			pairs = append(pairs, habitPair{
+				nameA:   active[i].Habit.Name,
+				nameB:   active[j].Habit.Name,
+				jaccard: float64(shared) / float64(union),
+			})
+		}
+	}
+	sort.Slice(pairs, func(i, j int) bool { return pairs[i].jaccard > pairs[j].jaccard })
+	if len(pairs) > n {
+		pairs = pairs[:n]
+	}
+	return pairs
 }
 
 // ── renderSuggest ─────────────────────────────────────────────────────────────
