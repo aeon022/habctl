@@ -276,20 +276,22 @@ type model struct {
 	weekView      bool
 	height        int
 
-	suggestText   string
-	suggestDone   bool
-	suggestCh     <-chan suggestChunkResult
-	suggestGen    int
-	suggestCancel context.CancelFunc
-	suggestItems  []suggestItem
-	suggestCursor int
+	suggestText    string
+	suggestDone    bool
+	suggestBlocked bool // true when suggestText is a Bundle-upsell message, not an AI response to parse
+	suggestCh      <-chan suggestChunkResult
+	suggestGen     int
+	suggestCancel  context.CancelFunc
+	suggestItems   []suggestItem
+	suggestCursor  int
 
 	// weekly review (AI briefing)
-	reviewText   string
-	reviewDone   bool
-	reviewCh     <-chan reviewChunkResult
-	reviewGen    int
-	reviewCancel context.CancelFunc
+	reviewText    string
+	reviewDone    bool
+	reviewBlocked bool // true when reviewText is a Bundle-upsell message, not an AI response
+	reviewCh      <-chan reviewChunkResult
+	reviewGen     int
+	reviewCancel  context.CancelFunc
 
 	settingsCursor   int
 	geminiMenuCursor int
@@ -846,8 +848,15 @@ func (m model) handleList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.suggestCancel()
 		}
 		m.state = viewSuggest
+		if !config.IsPro() {
+			m.suggestText = "AI habit suggestions is a missionctl Bundle feature — see missionctl.sh/#pricing"
+			m.suggestDone = true
+			m.suggestBlocked = true
+			return m, nil
+		}
 		m.suggestText = ""
 		m.suggestDone = false
+		m.suggestBlocked = false
 		m.suggestItems = nil
 		m.chainSuggestItems = nil
 		m.suggestCursor = 0
@@ -901,8 +910,15 @@ func (m model) handleList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.reviewCancel()
 		}
 		m.state = viewReview
+		if !config.IsPro() {
+			m.reviewText = "AI weekly review is a missionctl Bundle feature — see missionctl.sh/#pricing"
+			m.reviewDone = true
+			m.reviewBlocked = true
+			return m, nil
+		}
 		m.reviewText = ""
 		m.reviewDone = false
+		m.reviewBlocked = false
 		m.reviewGen++
 		rch := make(chan reviewChunkResult, 64)
 		m.reviewCh = rch
@@ -3287,7 +3303,9 @@ func topHabitCorrelations(habits []models.HabitStats, checkinDates map[int64]map
 func (m model) renderSuggest() string {
 	var b strings.Builder
 	providerLabel := ""
-	if info, err := ai.Detect(); err == nil {
+	if m.suggestBlocked {
+		// no call was made — showing a detected provider here would be misleading
+	} else if info, err := ai.Detect(); err == nil {
 		providerLabel = styleMuted.Render("via " + info.Display)
 	} else {
 		providerLabel = styleWarn.Render("no provider — S for settings")
@@ -3409,6 +3427,9 @@ func (m model) renderSuggest() string {
 	} else if !m.suggestDone {
 		b.WriteString(styleMuted.Render(loadingMsg) + "\n\n")
 		b.WriteString(styleLime.Render(blinkCursor))
+	} else if m.suggestBlocked {
+		b.WriteString(styleWarn.Render(m.suggestText) + "\n")
+		b.WriteString(styleMuted.Render("esc back"))
 	} else {
 		b.WriteString(styleWarn.Render("Format not recognised.") + "\n")
 		b.WriteString(styleMuted.Render("s   try again") + "\n")
@@ -3823,7 +3844,9 @@ func (m model) renderHabitDetail() string {
 func (m model) renderReview() string {
 	var b strings.Builder
 	providerLabel := ""
-	if info, err := ai.Detect(); err == nil {
+	if m.reviewBlocked {
+		// no call was made — showing a detected provider here would be misleading
+	} else if info, err := ai.Detect(); err == nil {
 		providerLabel = styleMuted.Render("via " + info.Display)
 	} else {
 		providerLabel = styleWarn.Render("no provider — S for settings")

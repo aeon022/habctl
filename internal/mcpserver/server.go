@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/aeon022/habctl/internal/ai"
+	"github.com/aeon022/habctl/internal/config"
 	"github.com/aeon022/habctl/internal/models"
 	"github.com/aeon022/habctl/internal/store"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -367,6 +368,9 @@ func handleWeeklySummary(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToo
 }
 
 func handleSuggestHabits(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if !config.IsPro() {
+		return mcp.NewToolResultText("AI habit suggestions is a missionctl Bundle feature. Get it at https://missionctl.sh/#pricing, then: habctl license activate <key>"), nil
+	}
 	routine := req.GetString("routine", "")
 	goal := req.GetString("goal", "")
 

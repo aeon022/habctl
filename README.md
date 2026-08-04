@@ -54,11 +54,12 @@ habctl
 | `habctl today` | Today's habit status at a glance |
 | `habctl list` | List all habits with today's status |
 | `habctl stats` | Statistics with streaks and progress bars |
-| `habctl review` | AI weekly review — coaching briefing for the last 7 days |
-| `habctl suggest [--goal TEXT] [--routine TEXT]` | AI-powered habit suggestions |
+| `habctl review` | AI weekly review — coaching briefing for the last 7 days (missionctl Bundle) |
+| `habctl suggest [--goal TEXT] [--routine TEXT]` | AI-powered habit suggestions (missionctl Bundle) |
 | `habctl remind` | macOS notification for unchecked habits |
 | `habctl delete NAME` | Delete a habit and all its check-ins |
 | `habctl mcp` | Start MCP server (stdio) |
+| `habctl license activate <key>` / `habctl license status` | Activate/check your missionctl Bundle license |
 
 ### TUI keys
 
@@ -73,9 +74,9 @@ habctl
 | `a` / `A` | Archive habit / open archive |
 | `d` | Delete habit permanently |
 | `m` / `G` | Move habit to group / manage groups |
-| `s` | AI suggestions (context-aware) |
+| `s` | AI suggestions (context-aware, missionctl Bundle) |
 | `g` | Goal → 3 linked habits (decompose) |
-| `r` | AI weekly review — coaching briefing |
+| `r` | AI weekly review — coaching briefing (missionctl Bundle) |
 | `t` | Stats — heatmap & completion |
 | `c` | Manage habit chains |
 | `S` | Settings — provider & API keys |
@@ -87,13 +88,13 @@ habctl
 
 ## AI Integration
 
-`suggest` and `review` use an LLM. Configure a provider once — environment variables always win over the config file (`~/.config/habctl/config.json`):
+`suggest` and `review` require an active [missionctl Bundle](https://missionctl.sh/#pricing) license (`habctl license activate <key>`) and use an LLM. Configure a provider once — environment variables always win over the config file (`~/.config/habctl/config.json`):
 
 | Provider | Setup |
 |---|---|
 | Anthropic (Claude) | `export ANTHROPIC_API_KEY=sk-ant-...` |
 | OpenAI | `export OPENAI_API_KEY=sk-...` |
-| Google Gemini | API key **or** browser OAuth login (Google Cloud Desktop-app client) |
+| Google Gemini | Free-tier API key ([aistudio.google.com/apikey](https://aistudio.google.com/apikey), no card required) **or** browser OAuth login (Google Cloud Desktop-app client) |
 | Ollama (local) | `ollama_host` + `ollama_model` in config, no key needed |
 
 ```bash

@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/aeon022/habctl/internal/ai"
+	"github.com/aeon022/habctl/internal/config"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 )
@@ -18,8 +19,10 @@ var (
 
 var suggestCmd = &cobra.Command{
 	Use:   "suggest",
-	Short: "AI-powered habit suggestions",
-	Long: `Let Claude suggest habits based on your goals and existing habits.
+	Short: "AI-powered habit suggestions — missionctl Bundle feature",
+	Long: `Let AI suggest habits based on your goals and existing habits.
+
+Requires an active missionctl Bundle license — https://missionctl.sh/#pricing
 
 Examples:
   habctl suggest
@@ -27,6 +30,9 @@ Examples:
   habctl suggest --routine health
   habctl suggest --goal "mehr Struktur und weniger Bildschirmzeit"`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if !config.IsPro() {
+			return fmt.Errorf("habctl suggest is a missionctl Bundle feature — get it at https://missionctl.sh/#pricing, then: habctl license activate <key>")
+		}
 		s, err := openStore()
 		if err != nil {
 			return err

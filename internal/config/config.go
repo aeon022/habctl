@@ -20,6 +20,41 @@ type Config struct {
 	GoogleClientID     string `json:"google_client_id,omitempty"`
 	GoogleClientSecret string `json:"google_client_secret,omitempty"`
 	GoogleRefreshToken string `json:"google_refresh_token,omitempty"`
+
+	LicenseKey    string `json:"license_key,omitempty"`
+	LicenseStatus string `json:"license_status,omitempty"`
+}
+
+// defaultPolarOrgID is aeon022's Polar.sh organization — shared across the
+// missionctl suite, same as postctl's.
+const defaultPolarOrgID = "aa792ea4-650e-492e-a955-9b3d564e943e"
+
+// IsPro reports whether a valid Pro/Bundle license is active on this
+// machine — gates AI habit suggestions and the AI weekly review.
+func IsPro() bool {
+	cfg, err := Load()
+	if err != nil {
+		return false
+	}
+	return cfg.LicenseStatus == "active"
+}
+
+func PolarOrgID() string {
+	if v := os.Getenv("HABCTL_POLAR_ORG_ID"); v != "" {
+		return v
+	}
+	return defaultPolarOrgID
+}
+
+// SetLicense persists the license key/status to ~/.config/habctl/config.json.
+func SetLicense(key, status string) error {
+	cfg, err := Load()
+	if err != nil {
+		return err
+	}
+	cfg.LicenseKey = key
+	cfg.LicenseStatus = status
+	return Save(cfg)
 }
 
 func path() (string, error) {
