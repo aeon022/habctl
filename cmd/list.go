@@ -11,8 +11,11 @@ import (
 var listFormat string
 
 var (
-	styleChecked = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))  // bright green
-	styleMuted   = lipgloss.NewStyle().Foreground(lipgloss.Color("240")) // dim gray
+	styleChecked = lipgloss.NewStyle().Foreground(lipgloss.Color("10")) // bright green
+	// 243/246 matches the Muted pair used across the rest of the suite
+	// (missionctl-core/theme) — flat "240" read fine on a light background
+	// but too dark/low-contrast against a dark one.
+	styleMuted = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "243", Dark: "246"})
 	styleHeader  = lipgloss.NewStyle().Bold(true).Underline(true)
 )
 

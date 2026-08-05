@@ -34,8 +34,11 @@ In TUI: press r.`,
 			return nil
 		}
 
-		lime := lipgloss.NewStyle().Foreground(lipgloss.Color("#84cc16")).Bold(true)
-		muted := lipgloss.NewStyle().Foreground(lipgloss.Color("#718096"))
+		// Light/Dark pairs match habctl's own AdaptiveColor set in
+		// internal/tui/tui.go (colorLime/colorMuted) — this print path had
+		// drifted to the Dark-only hex, invisible on a light terminal.
+		lime := lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#65a30d", Dark: "#84cc16"}).Bold(true)
+		muted := lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#64748b", Dark: "#718096"})
 
 		info, detErr := ai.Detect()
 		providerLabel := ""

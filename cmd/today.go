@@ -62,10 +62,15 @@ var todayCmd = &cobra.Command{
 			return nil
 		}
 
-		lime := lipgloss.NewStyle().Foreground(lipgloss.Color("#84cc16"))
-		muted := lipgloss.NewStyle().Foreground(lipgloss.Color("#718096"))
-		ok := lipgloss.NewStyle().Foreground(lipgloss.Color("#4ade80"))
-		bold := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#e2e8f0"))
+		// Light/Dark pairs match habctl's own AdaptiveColor set in
+		// internal/tui/tui.go (colorLime/colorMuted/colorOk/colorFg) — this
+		// print path had drifted to Dark-only hex values; "bold" in
+		// particular was near-white (#e2e8f0), invisible on a light
+		// terminal.
+		lime := lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#65a30d", Dark: "#84cc16"})
+		muted := lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#64748b", Dark: "#718096"})
+		ok := lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#16a34a", Dark: "#4ade80"})
+		bold := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.AdaptiveColor{Light: "#1e293b", Dark: "#e2e8f0"})
 
 		fmt.Println()
 		fmt.Printf("  %s  %s\n\n",
