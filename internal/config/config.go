@@ -6,54 +6,67 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+
+	"github.com/aeon022/missionctl-core/licensing"
 )
 
 // Config holds all persisted settings.
 type Config struct {
-	Provider       string `json:"provider,omitempty"`
-	AnthropicKey   string `json:"anthropic_api_key,omitempty"`
-	OpenAIKey      string `json:"openai_api_key,omitempty"`
-	GeminiKey      string `json:"gemini_api_key,omitempty"`
-	OllamaHost     string `json:"ollama_host,omitempty"`
-	OllamaModel    string `json:"ollama_model,omitempty"`
+	Provider     string `json:"provider,omitempty"`
+	AnthropicKey string `json:"anthropic_api_key,omitempty"`
+	OpenAIKey    string `json:"openai_api_key,omitempty"`
+	GeminiKey    string `json:"gemini_api_key,omitempty"`
+	OllamaHost   string `json:"ollama_host,omitempty"`
+	OllamaModel  string `json:"ollama_model,omitempty"`
 	// Google OAuth2 credentials (Desktop app from console.cloud.google.com).
 	GoogleClientID     string `json:"google_client_id,omitempty"`
 	GoogleClientSecret string `json:"google_client_secret,omitempty"`
 	GoogleRefreshToken string `json:"google_refresh_token,omitempty"`
 
-	LicenseKey    string `json:"license_key,omitempty"`
-	LicenseStatus string `json:"license_status,omitempty"`
+	LicenseKey       string `json:"license_key,omitempty"`
+	LicenseStatus    string `json:"license_status,omitempty"`
+	LicenseBenefitID string `json:"license_benefit_id,omitempty"`
 }
 
-// defaultPolarOrgID is aeon022's Polar.sh organization — shared across the
-// missionctl suite, same as postctl's.
-const defaultPolarOrgID = "aa792ea4-650e-492e-a955-9b3d564e943e"
+// bundleBenefitID and habctlBenefitID identify the missionctl Bundle's and
+// habctl's own individual-product license-key benefits in Polar. Both
+// start empty (the habctl-only product doesn't exist in Polar yet) — see
+// licensing.Result.Grants: empty IDs fall back to "any active key under
+// our org grants access", so this is a no-op until both are filled in once
+// the individual product is created and its benefit ID is known.
+const (
+	bundleBenefitID = ""
+	habctlBenefitID = ""
+)
 
-// IsPro reports whether a valid Pro/Bundle license is active on this
-// machine — gates AI habit suggestions and the AI weekly review.
+// IsPro reports whether a valid Pro/Bundle or habctl-only license is
+// active on this machine — gates AI habit suggestions and the AI weekly
+// review.
 func IsPro() bool {
 	cfg, err := Load()
 	if err != nil {
 		return false
 	}
-	return cfg.LicenseStatus == "active"
+	result := licensing.Result{Status: cfg.LicenseStatus, BenefitID: cfg.LicenseBenefitID}
+	return result.Grants(habctlBenefitID, bundleBenefitID)
 }
 
 func PolarOrgID() string {
 	if v := os.Getenv("HABCTL_POLAR_ORG_ID"); v != "" {
 		return v
 	}
-	return defaultPolarOrgID
+	return licensing.DefaultOrgID
 }
 
-// SetLicense persists the license key/status to ~/.config/habctl/config.json.
-func SetLicense(key, status string) error {
+// SetLicense persists the license key/status/benefit to ~/.config/habctl/config.json.
+func SetLicense(key, status, benefitID string) error {
 	cfg, err := Load()
 	if err != nil {
 		return err
 	}
 	cfg.LicenseKey = key
 	cfg.LicenseStatus = status
+	cfg.LicenseBenefitID = benefitID
 	return Save(cfg)
 }
 
