@@ -3,7 +3,7 @@ module github.com/aeon022/habctl
 go 1.26.5
 
 require (
-	github.com/aeon022/missionctl-core v0.0.0-20260805141405-10c5f5590599
+	github.com/aeon022/missionctl-core v0.0.0-20260807201926-45a61dcc9662
 	github.com/anthropics/anthropic-sdk-go v1.57.0
 	github.com/charmbracelet/bubbles v1.0.0
 	github.com/charmbracelet/bubbletea v1.3.10
@@ -64,5 +64,3 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
-
-replace github.com/aeon022/missionctl-core => ../missionctl-core
