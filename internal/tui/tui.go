@@ -58,6 +58,17 @@ var (
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(colorBorder).
 			Padding(1, 2)
+
+	// heatColors is the 5-level completion shading shared by the global
+	// Stats heatmap and the per-habit detail heatmap, so both read as the
+	// same visual language rather than two slightly different scales.
+	heatColors = [5]lipgloss.Style{
+		lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#cbd5e1", Dark: "#2d3748"}),
+		lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#86efac", Dark: "#276749"}),
+		lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#4ade80", Dark: "#38a169"}),
+		lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#22c55e", Dark: "#48bb78"}),
+		lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#16a34a", Dark: "#68d391"}),
+	}
 )
 
 // sectionHeader renders the "habctl · <Section>" prefix shared by every
@@ -249,6 +260,10 @@ type notesLoadedMsg struct {
 	name  string
 	notes []models.NoteEntry
 }
+type habitCheckinsLoadedMsg struct {
+	name  string
+	dates map[string]bool
+}
 type archivedLoadedMsg []models.Habit
 type archiveReloadMsg struct{ status string }
 
@@ -356,6 +371,11 @@ type model struct {
 	// detail-view: loaded per-habit recent notes
 	recentNotes    []models.NoteEntry
 	recentNotesFor string
+
+	// detail-view: loaded per-habit check-in history, for the multi-week
+	// heatmap (falls back to HabitStats.Last7Days until this arrives)
+	detailHeatmap    map[string]bool // date string ("2006-01-02") -> checked in
+	detailHeatmapFor string
 
 	// archive view
 	archivedHabits []models.Habit
@@ -590,6 +610,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.recentNotesFor = msg.name
 		return m, nil
 
+	case habitCheckinsLoadedMsg:
+		m.detailHeatmap = msg.dates
+		m.detailHeatmapFor = msg.name
+		return m, nil
+
 	case archivedLoadedMsg:
 		m.archivedHabits = []models.Habit(msg)
 		return m, nil
@@ -794,8 +819,8 @@ func (m model) handleList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			break
 		}
 		m.state = viewHabitDetail
-		name := m.habits[m.cursor].Habit.Name
-		return m, loadRecentNotes(m.s, name)
+		habit := m.habits[m.cursor].Habit
+		return m, tea.Batch(loadRecentNotes(m.s, habit.Name), loadHabitCheckins(m.s, habit.ID, habit.Name, 52))
 
 	case "w":
 		m.weekView = !m.weekView
@@ -3153,13 +3178,7 @@ func (m model) renderStats() string {
 	}
 	b.WriteString(monthLine.String() + "\n")
 
-	heat := [5]lipgloss.Style{
-		lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#cbd5e1", Dark: "#2d3748"}),
-		lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#86efac", Dark: "#276749"}),
-		lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#4ade80", Dark: "#38a169"}),
-		lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#22c55e", Dark: "#48bb78"}),
-		lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#16a34a", Dark: "#68d391"}),
-	}
+	heat := heatColors
 	dayLabels := []string{"m", "t", "w", "t", "f", "s", "s"}
 
 	for d := 0; d < 7; d++ {
@@ -3702,6 +3721,63 @@ func (m model) renderHelpPopup() string {
 	return panelStyle.Width(m.helpPopW).Render(body)
 }
 
+// renderHabitHeatmap draws a month-labeled, weekday-rowed completion
+// calendar for one habit — the same visual language as renderStats' global
+// heatmap, just binary (done/not done) instead of 5-level completion-%
+// shading, since there's only ever one habit's worth of data here. weeks is
+// however many fit ind..ind+width; the caller (renderHabitDetail) derives
+// that from the panel's actual width the same way renderStats does, so the
+// habit detail view uses the full width the panel already reserves instead
+// of leaving it empty next to a narrow fixed-width text column.
+func renderHabitHeatmap(dates map[string]bool, weeks, ind int) string {
+	if weeks < 1 {
+		weeks = 1
+	}
+	today := truncateDay(time.Now())
+	wd := int(today.Weekday())
+	daysFromMon := (wd + 6) % 7
+	thisMonday := today.AddDate(0, 0, -daysFromMon)
+	startDate := thisMonday.AddDate(0, 0, -(weeks-1)*7)
+	pad := strings.Repeat(" ", ind)
+
+	var b strings.Builder
+
+	var monthLine strings.Builder
+	monthLine.WriteString(pad + "  ")
+	lastMonth := -1
+	for w := 0; w < weeks; w++ {
+		day := startDate.AddDate(0, 0, w*7)
+		mo := int(day.Month())
+		if mo != lastMonth {
+			monthLine.WriteString(styleMuted.Render(day.Format("Jan")[:1]))
+			lastMonth = mo
+		} else {
+			monthLine.WriteString(" ")
+		}
+		monthLine.WriteString(" ")
+	}
+	b.WriteString(monthLine.String() + "\n")
+
+	dayLabels := []string{"m", "t", "w", "t", "f", "s", "s"}
+	for d := 0; d < 7; d++ {
+		var row strings.Builder
+		row.WriteString(pad + styleMuted.Render(dayLabels[d]) + " ")
+		for w := 0; w < weeks; w++ {
+			day := startDate.AddDate(0, 0, w*7+d)
+			switch {
+			case day.After(today):
+				row.WriteString(heatColors[0].Render("░ "))
+			case dates[day.Format("2006-01-02")]:
+				row.WriteString(heatColors[4].Render("█ "))
+			default:
+				row.WriteString(heatColors[0].Render("░ "))
+			}
+		}
+		b.WriteString(row.String() + "\n")
+	}
+	return b.String()
+}
+
 // ── renderHabitDetail ─────────────────────────────────────────────────────────
 
 func (m model) renderHabitDetail() string {
@@ -3711,8 +3787,12 @@ func (m model) renderHabitDetail() string {
 	h := m.habits[m.cursor]
 	habit := h.Habit
 
-	const maxW = 62 // max content width — keeps text readable, not edge-to-edge
-	ind := "  "     // section indent
+	// Prose (description, notes) stays at a comfortable reading width even
+	// on a wide terminal; the heatmap below instead uses the panel's full
+	// width, same as renderStats does — that's what actually fills the
+	// space a narrow fixed 62-col column used to leave empty.
+	maxW := min(m.innerWidth(), 76)
+	ind := "  " // section indent
 
 	var b strings.Builder
 
@@ -3777,28 +3857,39 @@ func (m model) renderHabitDetail() string {
 		}
 	}
 
-	// ── 7-day history ─────────────────────────────────────────────────────────
+	// ── history ───────────────────────────────────────────────────────────────
+	// The multi-week heatmap needs this habit's check-in dates, loaded async
+	// on "enter" (see loadHabitCheckins) — until it arrives, fall back to
+	// the cheap 7-dot row HabitStats already carries synchronously, so
+	// opening a habit never shows a blank gap while the query is in flight.
 	b.WriteString("\n")
-	b.WriteString(ind + styleMuted.Render("Last 7 days") + "\n")
-	today := truncateDay(time.Now())
-	dayAbbrDE := [7]string{"Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"}
-	var dayRow, dotRow strings.Builder
-	for i := 0; i < 7; i++ {
-		d := today.AddDate(0, 0, i-6)
-		abbr := fmt.Sprintf("%-4s", dayAbbrDE[int(d.Weekday())])
-		if h.Last7Days[i] {
-			dayRow.WriteString(styleOk.Render(abbr))
-			dotRow.WriteString(styleOkBold.Render("✓   "))
-		} else if i == 6 {
-			dayRow.WriteString(styleWarn.Render(abbr))
-			dotRow.WriteString(styleMuted.Render("·   "))
-		} else {
-			dayRow.WriteString(styleMuted.Render(abbr))
-			dotRow.WriteString(styleMuted.Render("·   "))
+	if m.detailHeatmapFor == habit.Name {
+		weeks := (m.innerWidth() - len(ind) - 2) / 2
+		weeks = min(max(weeks, 8), 52)
+		b.WriteString(ind + styleMuted.Render(fmt.Sprintf("Last %d weeks", weeks)) + "\n")
+		b.WriteString(renderHabitHeatmap(m.detailHeatmap, weeks, len(ind)))
+	} else {
+		b.WriteString(ind + styleMuted.Render("Last 7 days") + "\n")
+		today := truncateDay(time.Now())
+		dayAbbrDE := [7]string{"Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"}
+		var dayRow, dotRow strings.Builder
+		for i := 0; i < 7; i++ {
+			d := today.AddDate(0, 0, i-6)
+			abbr := fmt.Sprintf("%-4s", dayAbbrDE[int(d.Weekday())])
+			if h.Last7Days[i] {
+				dayRow.WriteString(styleOk.Render(abbr))
+				dotRow.WriteString(styleOkBold.Render("✓   "))
+			} else if i == 6 {
+				dayRow.WriteString(styleWarn.Render(abbr))
+				dotRow.WriteString(styleMuted.Render("·   "))
+			} else {
+				dayRow.WriteString(styleMuted.Render(abbr))
+				dotRow.WriteString(styleMuted.Render("·   "))
+			}
 		}
+		b.WriteString(ind + dayRow.String() + "\n")
+		b.WriteString(ind + dotRow.String() + "\n")
 	}
-	b.WriteString(ind + dayRow.String() + "\n")
-	b.WriteString(ind + dotRow.String() + "\n")
 
 	// ── stats ─────────────────────────────────────────────────────────────────
 	b.WriteString("\n")
@@ -3821,6 +3912,13 @@ func (m model) renderHabitDetail() string {
 			}
 			return "s"
 		}())) + "\n")
+	}
+	if h.LastCheckIn != nil && !h.CheckedToday {
+		b.WriteString(ind + lbl.Render("last check-in  "+h.LastCheckIn.Format("Mon, 02 Jan")) + "\n")
+	}
+	if !habit.CreatedAt.IsZero() {
+		days := int(time.Since(habit.CreatedAt).Hours() / 24)
+		b.WriteString(ind + lbl.Render(fmt.Sprintf("tracking since  %s  (%d days)", habit.CreatedAt.Format("02 Jan 2006"), days)) + "\n")
 	}
 
 	// ── chain ─────────────────────────────────────────────────────────────────
@@ -4055,6 +4153,21 @@ func loadRecentNotes(s *store.Store, name string) tea.Cmd {
 	return func() tea.Msg {
 		notes, _ := s.GetRecentNotes(name, 5)
 		return notesLoadedMsg{name: name, notes: notes}
+	}
+}
+
+// loadHabitCheckins fetches this one habit's check-in history for the
+// detail view's multi-week heatmap. GetCheckinDatesByHabit returns every
+// tracked habit's dates in one query (it's built for cross-habit
+// correlations, see topHabitCorrelations) — cheap enough to reuse here
+// rather than adding a single-habit query just for this.
+func loadHabitCheckins(s *store.Store, habitID int64, name string, weeks int) tea.Cmd {
+	return func() tea.Msg {
+		byHabit, err := s.GetCheckinDatesByHabit(weeks)
+		if err != nil {
+			return habitCheckinsLoadedMsg{name: name, dates: map[string]bool{}}
+		}
+		return habitCheckinsLoadedMsg{name: name, dates: byHabit[habitID]}
 	}
 }
 
