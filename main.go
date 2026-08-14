@@ -8,7 +8,7 @@ import (
 func main() {
 	// Apply saved API keys to env before any command runs.
 	if cfg, err := config.Load(); err == nil {
-		config.ApplyToEnv(cfg)
+		config.ApplyToEnv(cfg, false)
 	}
 	cmd.Execute()
 }

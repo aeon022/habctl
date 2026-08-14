@@ -114,34 +114,21 @@ func Save(cfg Config) error {
 	return os.WriteFile(p, data, 0o600)
 }
 
-// ApplyToEnv sets environment variables from cfg only when the variable is not
-// already set in the process environment. Call this at startup so that shell
-// env vars take precedence over saved config values.
-func ApplyToEnv(cfg Config) {
-	setIfMissing := func(key, val string) {
-		if val != "" && os.Getenv(key) == "" {
-			os.Setenv(key, val)
-		}
-	}
-	setIfMissing("HABCTL_PROVIDER", cfg.Provider)
-	setIfMissing("ANTHROPIC_API_KEY", cfg.AnthropicKey)
-	setIfMissing("OPENAI_API_KEY", cfg.OpenAIKey)
-	setIfMissing("GEMINI_API_KEY", cfg.GeminiKey)
-	setIfMissing("OLLAMA_HOST", cfg.OllamaHost)
-	setIfMissing("OLLAMA_MODEL", cfg.OllamaModel)
-	setIfMissing("GOOGLE_CLIENT_ID", cfg.GoogleClientID)
-	setIfMissing("GOOGLE_CLIENT_SECRET", cfg.GoogleClientSecret)
-	setIfMissing("GOOGLE_REFRESH_TOKEN", cfg.GoogleRefreshToken)
-}
-
-// ForceApplyToEnv unconditionally overwrites environment variables from cfg.
-// Call this after saving config changes so ai.Detect() immediately picks up
-// the new values without needing a restart.
-func ForceApplyToEnv(cfg Config) {
+// ApplyToEnv sets environment variables from cfg. When force is false, a
+// variable already set in the process environment is left alone (used at
+// startup so shell env vars take precedence over saved config values). When
+// force is true, values are unconditionally overwritten (used after saving
+// config changes so ai.Detect() immediately picks up the new values without
+// needing a restart).
+func ApplyToEnv(cfg Config, force bool) {
 	set := func(key, val string) {
-		if val != "" {
-			os.Setenv(key, val)
+		if val == "" {
+			return
 		}
+		if !force && os.Getenv(key) != "" {
+			return
+		}
+		os.Setenv(key, val)
 	}
 	set("HABCTL_PROVIDER", cfg.Provider)
 	set("ANTHROPIC_API_KEY", cfg.AnthropicKey)

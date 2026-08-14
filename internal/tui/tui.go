@@ -9,7 +9,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/aeon022/habctl/internal/ai"
 	"github.com/aeon022/habctl/internal/auth"
@@ -631,7 +630,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case oauthSuccessMsg:
 		m.cfg.GoogleRefreshToken = msg.refreshToken
 		config.Save(m.cfg)
-		config.ForceApplyToEnv(m.cfg)
+		config.ApplyToEnv(m.cfg, true)
 		m.state = viewList
 		m.message = "Google login successful — Gemini active"
 		return m, nil
@@ -1108,7 +1107,7 @@ func (m model) handleList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "S":
 		cfg, _ := config.Load()
 		m.cfg = cfg
-		config.ForceApplyToEnv(cfg)
+		config.ApplyToEnv(cfg, true)
 		m.state = viewSettings
 		m.settingsCursor = 0
 
@@ -2187,7 +2186,7 @@ func (m model) handleSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case ai.ProviderOllama:
 			m.cfg.Provider = string(ai.ProviderOllama)
 			config.Save(m.cfg)
-			config.ForceApplyToEnv(m.cfg)
+			config.ApplyToEnv(m.cfg, true)
 			m.state = viewList
 			m.message = "Ollama active (local)"
 		case ai.ProviderGemini:
@@ -2285,7 +2284,7 @@ func (m model) handleGeminiCS(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.cfg.GoogleClientID = m.geminiClientID
 			m.cfg.GoogleClientSecret = v
 			config.Save(m.cfg)
-			config.ForceApplyToEnv(m.cfg)
+			config.ApplyToEnv(m.cfg, true)
 			m.state = viewOAuthWait
 			return m, startOAuth(m.cfg.GoogleClientID, m.cfg.GoogleClientSecret)
 		}
@@ -2306,7 +2305,7 @@ func (m model) handleKeyInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "o":
 		p := providers[m.settingsCursor]
 		if p.keyPage != "" {
-			go openBrowser(p.keyPage)
+			go auth.OpenBrowser(p.keyPage)
 		}
 		return m, nil
 	case "enter":
@@ -2325,7 +2324,7 @@ func (m model) handleKeyInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			m.cfg.Provider = string(p.id)
 			config.Save(m.cfg)
-			config.ForceApplyToEnv(m.cfg)
+			config.ApplyToEnv(m.cfg, true)
 			m.state = viewList
 			m.message = p.label + " configured"
 		}
@@ -4473,27 +4472,3 @@ func startOAuth(clientID, clientSecret string) tea.Cmd {
 	}
 }
 
-func openBrowser(url string) {
-	auth.OpenBrowser(url)
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
-// displayWidth returns the approximate display width of a string,
-// counting emoji and CJK as 2 columns.
-func displayWidth(s string) int {
-	w := 0
-	for _, r := range s {
-		if r >= 0x1F000 || (r >= 0x2600 && r <= 0x27BF) {
-			w += 2
-		} else {
-			w += utf8.RuneLen(r) // approximation
-		}
-	}
-	return w
-}

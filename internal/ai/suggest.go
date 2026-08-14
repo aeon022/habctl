@@ -205,16 +205,6 @@ func SuggestBlocking(req SuggestRequest) (string, error) {
 	return Call(context.Background(), info, systemPromptSuggest, buildPrompt(req), nil)
 }
 
-// SuggestOllama streams suggestions from a local Ollama instance.
-func SuggestOllama(req SuggestRequest, out func(string)) (string, error) {
-	model := os.Getenv("OLLAMA_MODEL")
-	if model == "" {
-		model = "llama3.2"
-	}
-	info := ProviderInfo{ProviderOllama, model, "Ollama (" + model + ", local)"}
-	return Call(context.Background(), info, systemPromptSuggest, buildPrompt(req), out)
-}
-
 // SuggestWithProvider runs against a specific provider (for the --provider flag).
 func SuggestWithProvider(req SuggestRequest, p Provider, out func(string)) (string, error) {
 	info, err := Detect()
