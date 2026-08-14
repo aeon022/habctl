@@ -192,7 +192,19 @@ func detectForced(p Provider) (ProviderInfo, error) {
 		}
 		return ProviderInfo{ProviderGemini, model, "Gemini " + model + " (Google)"}, nil
 	case ProviderOllama:
-		model := "llama3.2"
+		// Was hardcoded to "llama3.2" regardless of OLLAMA_MODEL — Detect()
+		// and SuggestOllama() both already checked it, but --provider
+		// ollama (the only caller that reaches this branch, via
+		// SuggestWithProvider) took this separate path and silently
+		// ignored it: the printed status line ("via Ollama (mistral,
+		// local)", from cmd/suggest.go's own separate Detect() call for
+		// display) didn't match what actually got requested from Ollama
+		// ("llama3.2"), which then 404'd for anyone who'd only pulled
+		// their configured model.
+		model := os.Getenv("OLLAMA_MODEL")
+		if model == "" {
+			model = "llama3.2"
+		}
 		return ProviderInfo{ProviderOllama, model, "Ollama (" + model + ", local)"}, nil
 	}
 	return ProviderInfo{}, fmt.Errorf("unknown provider %q", p)
