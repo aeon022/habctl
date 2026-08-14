@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/aeon022/habctl/internal/ai"
 	"github.com/aeon022/habctl/internal/config"
@@ -87,7 +88,7 @@ Examples:
 			Count:          suggestCount,
 		}
 
-		_, err = ai.SuggestWithProvider(req, ai.Provider(suggestProvider), func(chunk string) {
+		raw, err := ai.SuggestWithProvider(req, ai.Provider(suggestProvider), func(chunk string) {
 			fmt.Print(chunk)
 			os.Stdout.Sync()
 		})
@@ -97,10 +98,43 @@ Examples:
 
 		fmt.Println()
 		fmt.Println()
-		fmt.Println(muted.Render("Add with: habctl add \"<name>\""))
+		printAddHints(raw, muted, lime)
 		fmt.Println()
 		return nil
 	},
+}
+
+// printAddHints prints one ready-to-run "habctl add" line per parsed
+// suggestion, carrying its Benefit/Time/Tip over via --desc — replacing the
+// old generic "Add with: habctl add \"<name>\"" hint, which pointed at a
+// real command but silently discarded everything except the name (the CLI
+// never parsed its own AI response, unlike the TUI's suggestion-accept flow,
+// which already builds the description from these same fields). Falls back
+// to the old generic hint if the response didn't parse into any suggestions
+// at all — a model that didn't follow the format shouldn't leave the user
+// with no hint whatsoever.
+func printAddHints(raw string, muted, lime lipgloss.Style) {
+	suggestions := ai.ParseSuggestions(raw)
+	if len(suggestions) == 0 {
+		fmt.Println(muted.Render("Add with: habctl add \"<name>\""))
+		return
+	}
+	fmt.Println(muted.Render("Add with:"))
+	for _, s := range suggestions {
+		desc := s.Benefit
+		if s.Time != "" {
+			desc = "(" + s.Time + ") " + desc
+		}
+		if s.Tip != "" {
+			desc += " Tip: " + s.Tip
+		}
+		escape := func(v string) string { return strings.ReplaceAll(v, `"`, `\"`) }
+		line := fmt.Sprintf("  habctl add \"%s\"", escape(s.Name))
+		if desc != "" {
+			line = fmt.Sprintf("  habctl add \"%s\" --desc \"%s\"", escape(s.Name), escape(desc))
+		}
+		fmt.Println(lime.Render(line))
+	}
 }
 
 func init() {

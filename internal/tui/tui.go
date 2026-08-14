@@ -2769,6 +2769,7 @@ func (m model) renderList() string {
 		fk("↵", "open") + styleMuted.Render("  ") +
 		fk("n", "new") + styleMuted.Render("  ") +
 		fk("e", "edit") + styleMuted.Render("  ") +
+		fk("d", "delete") + styleMuted.Render("  ") +
 		fk("y", "copy") + styleMuted.Render("  ") +
 		fk("s", "AI") + styleMuted.Render("  ") +
 		fk("r", "review") + styleMuted.Render("  ") +
@@ -4402,44 +4403,25 @@ func splitIcon(input string) (icon, name string) {
 	return "", string(r)
 }
 
-// parseSuggestions parses the ### block format produced by the AI.
-// Each block is delimited by "###" and contains Name:, Time:, Benefit:, Tip: fields.
+// parseSuggestions adapts ai.ParseSuggestions (the shared "###" Name:/Time:/
+// Benefit:/Tip: block parser — see its doc comment) into this view's own
+// suggestItem shape (header/details are display concerns specific to this
+// list, not part of the shared format).
 func parseSuggestions(text string) []suggestItem {
 	var items []suggestItem
-	for _, block := range strings.Split(text, "###") {
-		block = strings.TrimSpace(block)
-		if block == "" {
-			continue
-		}
-		var name, timeStr, benefit, tip string
-		for _, raw := range strings.Split(block, "\n") {
-			line := strings.TrimSpace(raw)
-			switch {
-			case strings.HasPrefix(line, "Name:"):
-				name = strings.TrimSpace(strings.TrimPrefix(line, "Name:"))
-			case strings.HasPrefix(line, "Time:"):
-				timeStr = strings.TrimSpace(strings.TrimPrefix(line, "Time:"))
-			case strings.HasPrefix(line, "Benefit:"):
-				benefit = strings.TrimSpace(strings.TrimPrefix(line, "Benefit:"))
-			case strings.HasPrefix(line, "Tip:"):
-				tip = strings.TrimSpace(strings.TrimPrefix(line, "Tip:"))
-			}
-		}
-		if name == "" {
-			continue
-		}
-		header := name
-		if timeStr != "" {
-			header = name + "  ·  " + timeStr
+	for _, s := range ai.ParseSuggestions(text) {
+		header := s.Name
+		if s.Time != "" {
+			header = s.Name + "  ·  " + s.Time
 		}
 		var details []string
-		if benefit != "" {
-			details = append(details, benefit)
+		if s.Benefit != "" {
+			details = append(details, s.Benefit)
 		}
-		if tip != "" {
-			details = append(details, "Tip: "+tip)
+		if s.Tip != "" {
+			details = append(details, "Tip: "+s.Tip)
 		}
-		items = append(items, suggestItem{name: name, header: header, details: details})
+		items = append(items, suggestItem{name: s.Name, header: header, details: details})
 	}
 	return items
 }

@@ -9,25 +9,25 @@ import (
 	"github.com/aeon022/habctl/internal/models"
 )
 
-const systemPromptSuggest = `You are a habit coach. Reply in English.
+const systemPromptSuggest = `You are a habit coach. Reply in the same language as the user's goal (or their existing habit names, if no goal is given) — default to English only if that's genuinely ambiguous. The field labels "Name:", "Time:", "Benefit:", "Tip:" and the "###" delimiters are a fixed machine format and must stay exactly as shown, in English, regardless of reply language — only the bracketed content after each label gets translated.
 
 Output habit suggestions in EXACTLY this format — no text before, no text after.
-Each habit block starts and ends with the line "###".
+Each habit block starts and ends with the line "###". The brackets below mark where your own text goes — never print a literal "[" or "]" in your output, and never print an emoji as a text shortcode like ":muscle:"; use one real Unicode emoji character instead.
 
 ###
-Name: [Emoji] [Habit name]
-Time: [X min/day]
-Benefit: [1-2 sentences of concrete benefit]
-Tip: [one practical getting-started tip]
+Name: (one real emoji character)(habit name, no brackets around either)
+Time: (a real estimate, e.g. "10 min/day" — no brackets)
+Benefit: (1-2 sentences of concrete benefit, no brackets)
+Tip: (one practical getting-started tip, no brackets)
 ###
 
 The app parses this format programmatically. Deviations break parsing.
-Rules: Emoji directly before the name · realistic time estimate · no overlap with existing habits`
+Rules: emoji directly before the name, as an actual character (💪 not :muscle:) · realistic time estimate · no overlap with existing habits`
 
-const systemPromptReview = `You are a personal habit coach. Reply in English. Be direct, concrete and encouraging.
+const systemPromptReview = `You are a personal habit coach. Reply in the same language as the habit names in the data you're given — default to English only if that's genuinely ambiguous. Be direct, concrete and encouraging.
 
 Analyse the habit data from the last week and write a short coaching briefing.
-Structure (use exactly these sections):
+Structure (use exactly these sections, keeping the "## " markdown prefix — translate the heading text itself into the reply language, e.g. "## Wochenübersicht"):
 
 ## Weekly Overview
 1-2 sentences: what went well, what was the overall completion rate.
@@ -46,22 +46,22 @@ One short, punchy habit coaching tip (1-2 sentences).
 
 No intro, no closing remarks beyond the briefing itself. No markdown bold on the section names themselves.`
 
-const systemPromptDecompose = `You are a habit coach. Reply in English.
+const systemPromptDecompose = `You are a habit coach. Reply in the same language as the user's goal — default to English only if that's genuinely ambiguous. The field labels "Name:", "Time:", "Benefit:", "Tip:" and the "###" delimiters are a fixed machine format and must stay exactly as shown, in English, regardless of reply language — only the bracketed content after each label gets translated.
 
 The user names a goal. Suggest exactly 3 interconnected habits that mutually reinforce each other.
 
-Output format — no text before or after:
+Output format — no text before or after. The brackets below mark where your own text goes — never print a literal "[" or "]" in your output, and never print an emoji as a text shortcode like ":muscle:"; use one real Unicode emoji character instead.
 
 ###
-Name: [Emoji] [Habit name]
-Time: [X min/day]
-Benefit: [how this habit concretely supports the goal]
-Tip: [how it reinforces the other two habits or benefits from them]
+Name: (one real emoji character)(habit name, no brackets around either)
+Time: (a real estimate, e.g. "10 min/day" — no brackets)
+Benefit: (how this habit concretely supports the goal, no brackets)
+Tip: (how it reinforces the other two habits or benefits from them, no brackets)
 ###
 
-Rules: Exactly 3 habits · mutually reinforcing (timing/theme) · Emoji directly before name · 3–15 min/day · no duplicates of existing habits`
+Rules: Exactly 3 habits · mutually reinforcing (timing/theme) · emoji directly before name, as an actual character (💪 not :muscle:) · 3–15 min/day · no duplicates of existing habits`
 
-const systemPromptChains = `You are a habit coach. Reply in English.
+const systemPromptChains = `You are a habit coach. Reply in the same language as the given habit names — default to English only if that's genuinely ambiguous. The field labels "From:", "To:", "Why:" and the "###" delimiters are a fixed machine format and must stay exactly as shown, in English. From:/To: must be copied verbatim from the given habit list (exact names, never translated); only the Why: sentence is free text and follows the reply language.
 
 Analyse the given habits and suggest sensible habit chains.
 A habit chain means: when someone completes habit A, they should do habit B directly after.
@@ -82,6 +82,51 @@ Rules:
 
 // ErrNoAPIKey is returned when no provider key is configured.
 var ErrNoAPIKey = fmt.Errorf("no API key found — set ANTHROPIC_API_KEY, OPENAI_API_KEY or GEMINI_API_KEY")
+
+// Suggestion is one parsed "###" block from systemPromptSuggest/Decompose's
+// output format.
+type Suggestion struct {
+	Name    string
+	Time    string
+	Benefit string
+	Tip     string
+}
+
+// ParseSuggestions parses the "###"-delimited Name:/Time:/Benefit:/Tip:
+// block format produced by Suggest/DecomposeGoal (see systemPromptSuggest's
+// doc comment on why the field labels are English regardless of the reply
+// language). Exported so both the TUI's own suggestion-accept flow and the
+// plain CLI (`habctl suggest`, which used to just print raw streamed text
+// with a generic, content-losing "Add with: habctl add \"<name>\"" hint
+// afterward) can turn a response into structured habits instead of
+// re-parsing this format themselves.
+func ParseSuggestions(text string) []Suggestion {
+	var items []Suggestion
+	for _, block := range strings.Split(text, "###") {
+		block = strings.TrimSpace(block)
+		if block == "" {
+			continue
+		}
+		var s Suggestion
+		for _, raw := range strings.Split(block, "\n") {
+			line := strings.TrimSpace(raw)
+			switch {
+			case strings.HasPrefix(line, "Name:"):
+				s.Name = strings.TrimSpace(strings.TrimPrefix(line, "Name:"))
+			case strings.HasPrefix(line, "Time:"):
+				s.Time = strings.TrimSpace(strings.TrimPrefix(line, "Time:"))
+			case strings.HasPrefix(line, "Benefit:"):
+				s.Benefit = strings.TrimSpace(strings.TrimPrefix(line, "Benefit:"))
+			case strings.HasPrefix(line, "Tip:"):
+				s.Tip = strings.TrimSpace(strings.TrimPrefix(line, "Tip:"))
+			}
+		}
+		if s.Name != "" {
+			items = append(items, s)
+		}
+	}
+	return items
+}
 
 // SuggestRequest is the input for habit suggestions.
 type SuggestRequest struct {
