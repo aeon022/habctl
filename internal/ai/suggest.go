@@ -83,6 +83,41 @@ Rules:
 // ErrNoAPIKey is returned when no provider key is configured.
 var ErrNoAPIKey = fmt.Errorf("no API key found — set ANTHROPIC_API_KEY, OPENAI_API_KEY or GEMINI_API_KEY")
 
+// germanTells are common German function words unlikely to appear in
+// English input, used by languageDirective's lightweight heuristic.
+var germanTells = []string{
+	" der ", " die ", " das ", " und ", " mehr ", " im ", " für ", " mit ",
+	" ist ", " ein ", " eine ", " ich ", " nicht ", " auf ", " zu ", " beim ",
+	" beim", " täglich", " wöchentlich", " gewohnheit",
+}
+
+// languageDirective returns an explicit "reply in German" instruction to
+// prepend to the user prompt when text looks German, or "" otherwise (in
+// which case the model's own default — English — applies, unchanged from
+// before). Just telling the system prompt to "reply in the same language as
+// the input" and leaving detection to the model turned out not to work
+// reliably on a smaller local model (confirmed live: Mistral kept answering
+// in English even for an unambiguous German goal like "mehr Bewegung im
+// Alltag") — an explicit, unconditional instruction stating the language
+// outright is what it actually follows (also confirmed live). This can't
+// tell German apart from every other non-English language, only German —
+// the one this matters for here — everything else still falls through to
+// English, same as before this existed.
+func languageDirective(text string) string {
+	if strings.ContainsAny(text, "äöüßÄÖÜ") {
+		return germanDirective
+	}
+	padded := " " + strings.ToLower(text) + " "
+	for _, tell := range germanTells {
+		if strings.Contains(padded, tell) {
+			return germanDirective
+		}
+	}
+	return ""
+}
+
+const germanDirective = "IMPORTANT: My input below is written in German. Write your entire reply in German (every field value) — only the field labels themselves (e.g. Name/Time/Benefit/Tip, or From/To/Why, or the \"## \" section headings) stay as specified in the format rules above.\n\n"
+
 // Suggestion is one parsed "###" block from systemPromptSuggest/Decompose's
 // output format.
 type Suggestion struct {
@@ -196,6 +231,7 @@ func DecomposeGoal(ctx context.Context, goal string, existing []string, out func
 		return "", err
 	}
 	var b strings.Builder
+	b.WriteString(languageDirective(goal))
 	if len(existing) > 0 {
 		b.WriteString("My existing habits (no duplicates):\n")
 		for _, h := range existing {
@@ -217,6 +253,7 @@ func SuggestChains(ctx context.Context, habits []string, out func(string)) (stri
 		return "", fmt.Errorf("at least 2 habits required for chain suggestions")
 	}
 	var b strings.Builder
+	b.WriteString(languageDirective(strings.Join(habits, " ")))
 	b.WriteString("My habits:\n")
 	for _, h := range habits {
 		b.WriteString("- " + h + "\n")
@@ -262,6 +299,12 @@ func buildPrompt(req SuggestRequest) string {
 
 	var b strings.Builder
 
+	langSource := req.Goal
+	if langSource == "" {
+		langSource = strings.Join(req.ExistingHabits, " ")
+	}
+	b.WriteString(languageDirective(langSource))
+
 	if len(req.ExistingHabits) > 0 {
 		b.WriteString("My existing habits:\n")
 		for _, h := range req.ExistingHabits {
@@ -301,6 +344,11 @@ func buildPrompt(req SuggestRequest) string {
 
 func buildReviewPrompt(data models.WeeklyReview) string {
 	var b strings.Builder
+	var names []string
+	for _, h := range data.Habits {
+		names = append(names, h.Name)
+	}
+	b.WriteString(languageDirective(strings.Join(names, " ")))
 	b.WriteString(fmt.Sprintf("Habits analysed: %d\n", len(data.Habits)))
 	b.WriteString(fmt.Sprintf("Perfect days this week: %d/7\n", data.PerfectDays))
 	if data.WeakestDay != "" {

@@ -73,3 +73,34 @@ func TestParseSuggestions_EmptyAndMalformedInput(t *testing.T) {
 		t.Errorf("ParseSuggestions(no Name:) = %+v, want empty", got)
 	}
 }
+
+// Regression test: telling the system prompt to "reply in the same
+// language as the input" and leaving detection to the model didn't work
+// reliably on a smaller local model — confirmed live, Mistral kept
+// answering in English for the unambiguous German goal "mehr Bewegung im
+// Alltag". languageDirective is the fix: detect German ourselves and tell
+// the model outright instead of asking it to infer, which Mistral does
+// follow (also confirmed live). Only English/German are distinguished here
+// — everything else still falls through to the model's own default
+// (English), same as before this existed.
+func TestLanguageDirective(t *testing.T) {
+	cases := []struct {
+		name string
+		text string
+		want bool // whether a directive should be returned
+	}{
+		{"clear German sentence", "mehr Bewegung im Alltag", true},
+		{"German umlaut alone is enough", "Müdigkeit überwinden", true},
+		{"clear English sentence", "more exercise in daily life", false},
+		{"empty input", "", false},
+		{"single ambiguous word", "Yoga", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := languageDirective(c.text) != ""
+			if got != c.want {
+				t.Errorf("languageDirective(%q) returned a directive = %v, want %v", c.text, got, c.want)
+			}
+		})
+	}
+}
