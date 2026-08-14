@@ -127,6 +127,21 @@ type Suggestion struct {
 	Tip     string
 }
 
+// Description builds the single-string habit description AddHabit expects
+// out of Time/Benefit/Tip — the same composition both the CLI's add-hints
+// (cmd/suggest.go) and the numbered `habctl add <N>` lookup (cmd/add.go)
+// need, factored out once so they can't drift apart.
+func (s Suggestion) Description() string {
+	desc := s.Benefit
+	if s.Time != "" {
+		desc = "(" + s.Time + ") " + desc
+	}
+	if s.Tip != "" {
+		desc += " Tip: " + s.Tip
+	}
+	return desc
+}
+
 // ParseSuggestions parses the "###"-delimited Name:/Time:/Benefit:/Tip:
 // block format produced by Suggest/DecomposeGoal (see systemPromptSuggest's
 // doc comment on why the field labels are English regardless of the reply

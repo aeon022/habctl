@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aeon022/habctl/internal/ai"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -33,48 +34,42 @@ func captureStdout(t *testing.T, fn func()) string {
 	return buf.String()
 }
 
-// Regression test: the CLI's "Add with:" hint used to be one generic,
-// content-losing line ("Add with: habctl add \"<name>\"") regardless of
-// what the AI actually suggested — the Time/Benefit/Tip fields it just
-// streamed and printed above were discarded the moment it told you how to
-// save one. printAddHints now parses its own response and prints a
-// ready-to-run command per suggestion, carrying that content over via
-// --desc.
-func TestPrintAddHints_CarriesContentIntoDescFlag(t *testing.T) {
+// Regression test: the CLI's "Add with:" hint went through two shapes
+// before this one. Originally one generic, content-losing line ("Add with:
+// habctl add \"<name>\"") regardless of what the AI actually suggested —
+// the Time/Benefit/Tip fields it just streamed and printed above were
+// discarded the moment it told you how to save one. Fixed to print the full
+// name and --desc inline, which fixed the content loss but traded it for a
+// new problem: an emoji-prefixed name is awkward to type or copy-paste
+// correctly in a terminal. printAddHints now caches the parsed suggestions
+// (SaveLastSuggestions) and prints just "habctl add <N>" per one — nothing
+// left to type or copy at all, see resolveAddArgs in cmd/add.go for the
+// lookup this enables.
+func TestPrintAddHints_PrintsNumberedCommandsAndCachesForAdd(t *testing.T) {
+	t.Cleanup(func() { ai.SaveLastSuggestions(nil) })
+
 	muted := lipgloss.NewStyle()
 	lime := lipgloss.NewStyle()
-	raw := "###\nName: Daily Core Workout\nTime: 15 min/day\nBenefit: Builds core strength.\nTip: Start with planks.\n###"
+	raw := "###\nName: Daily Core Workout\nTime: 15 min/day\nBenefit: Builds core strength.\nTip: Start with planks.\n###\n###\nName: Evening Reading\nBenefit: Winds down the day.\n###"
 
 	out := captureStdout(t, func() { printAddHints(raw, muted, lime) })
 
-	if !strings.Contains(out, `habctl add "Daily Core Workout"`) {
-		t.Errorf("output missing the add command for the suggestion:\n%s", out)
+	if !strings.Contains(out, "habctl add 1") || !strings.Contains(out, "habctl add 2") {
+		t.Errorf("output missing numbered add commands for both suggestions:\n%s", out)
 	}
-	if !strings.Contains(out, "--desc") || !strings.Contains(out, "Builds core strength.") {
-		t.Errorf("output missing --desc with the suggestion's content:\n%s", out)
+	if !strings.Contains(out, "Daily Core Workout") || !strings.Contains(out, "Evening Reading") {
+		t.Errorf("output missing the suggestion names for reference:\n%s", out)
 	}
 	if strings.Contains(out, `"<name>"`) {
 		t.Errorf("output still contains the old generic placeholder hint:\n%s", out)
 	}
-}
 
-// A quote inside a suggested name/benefit must not break the printed
-// command if copy-pasted into a shell.
-func TestPrintAddHints_EscapesQuotesInContent(t *testing.T) {
-	muted := lipgloss.NewStyle()
-	lime := lipgloss.NewStyle()
-	raw := `###
-Name: The "Deep Work" Block
-Benefit: Say "no" to distractions.
-###`
-
-	out := captureStdout(t, func() { printAddHints(raw, muted, lime) })
-
-	if !strings.Contains(out, `\"Deep Work\"`) {
-		t.Errorf("output doesn't escape the quote in the name:\n%s", out)
+	cached, err := ai.LoadLastSuggestions()
+	if err != nil {
+		t.Fatalf("LoadLastSuggestions() error = %v", err)
 	}
-	if !strings.Contains(out, `\"no\"`) {
-		t.Errorf("output doesn't escape the quote in the description:\n%s", out)
+	if len(cached) != 2 || cached[0].Name != "Daily Core Workout" || cached[1].Name != "Evening Reading" {
+		t.Errorf("cached suggestions = %+v, want both parsed suggestions in order", cached)
 	}
 }
 

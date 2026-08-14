@@ -3,7 +3,6 @@ package cmd
 import (
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/aeon022/habctl/internal/ai"
 	"github.com/aeon022/habctl/internal/config"
@@ -104,36 +103,34 @@ Examples:
 	},
 }
 
-// printAddHints prints one ready-to-run "habctl add" line per parsed
-// suggestion, carrying its Benefit/Time/Tip over via --desc — replacing the
-// old generic "Add with: habctl add \"<name>\"" hint, which pointed at a
-// real command but silently discarded everything except the name (the CLI
-// never parsed its own AI response, unlike the TUI's suggestion-accept flow,
-// which already builds the description from these same fields). Falls back
-// to the old generic hint if the response didn't parse into any suggestions
-// at all — a model that didn't follow the format shouldn't leave the user
-// with no hint whatsoever.
+// printAddHints prints one ready-to-run "habctl add <N>" line per parsed
+// suggestion — replacing the old generic "Add with: habctl add \"<name>\""
+// hint, which pointed at a real command but silently discarded everything
+// except the name (the CLI never parsed its own AI response, unlike the
+// TUI's suggestion-accept flow, which already builds the description from
+// these same fields). An earlier version of this fix printed the full name
+// and --desc inline, which fixed the content loss but traded it for a new
+// problem: an emoji-prefixed name is awkward to type or copy-paste
+// correctly in a terminal. Caching the parsed suggestions (SaveLastSuggestions)
+// and printing just their 1-based index instead means `habctl add 2` alone
+// carries the name and description over automatically (see cmd/add.go) —
+// nothing to type or copy at all. Falls back to the old generic hint if the
+// response didn't parse into any suggestions at all — a model that didn't
+// follow the format shouldn't leave the user with no hint whatsoever.
 func printAddHints(raw string, muted, lime lipgloss.Style) {
 	suggestions := ai.ParseSuggestions(raw)
 	if len(suggestions) == 0 {
 		fmt.Println(muted.Render("Add with: habctl add \"<name>\""))
 		return
 	}
+	if err := ai.SaveLastSuggestions(suggestions); err != nil {
+		// Non-fatal — habctl add <N> just won't resolve without the cache;
+		// the plain-name form printed below still works either way.
+		fmt.Fprintf(os.Stderr, "warning: could not cache suggestions for \"habctl add <N>\": %v\n", err)
+	}
 	fmt.Println(muted.Render("Add with:"))
-	for _, s := range suggestions {
-		desc := s.Benefit
-		if s.Time != "" {
-			desc = "(" + s.Time + ") " + desc
-		}
-		if s.Tip != "" {
-			desc += " Tip: " + s.Tip
-		}
-		escape := func(v string) string { return strings.ReplaceAll(v, `"`, `\"`) }
-		line := fmt.Sprintf("  habctl add \"%s\"", escape(s.Name))
-		if desc != "" {
-			line = fmt.Sprintf("  habctl add \"%s\" --desc \"%s\"", escape(s.Name), escape(desc))
-		}
-		fmt.Println(lime.Render(line))
+	for i, s := range suggestions {
+		fmt.Println(lime.Render(fmt.Sprintf("  habctl add %d", i+1)) + muted.Render("   "+s.Name))
 	}
 }
 
