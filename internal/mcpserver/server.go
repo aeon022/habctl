@@ -9,6 +9,7 @@ import (
 	"github.com/aeon022/habctl/internal/config"
 	"github.com/aeon022/habctl/internal/models"
 	"github.com/aeon022/habctl/internal/store"
+	"github.com/aeon022/missionctl-core/dateutil"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
@@ -131,7 +132,7 @@ func handleCheckHabit(_ context.Context, req mcp.CallToolRequest) (*mcp.CallTool
 		return mcp.NewToolResultError("name is required"), nil
 	}
 
-	date, err := models.ParseDateArg(dateStr)
+	date, err := dateutil.ParseDateArg(dateStr)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
@@ -407,7 +408,7 @@ func handleAddCheckinNote(_ context.Context, req mcp.CallToolRequest) (*mcp.Call
 		return mcp.NewToolResultError("name is required"), nil
 	}
 
-	date, err := models.ParseDateArg(dateStr)
+	date, err := dateutil.ParseDateArg(dateStr)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
@@ -436,7 +437,7 @@ func handleUncheckHabit(_ context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 		return mcp.NewToolResultError("name is required"), nil
 	}
 
-	date, err := models.ParseDateArg(dateStr)
+	date, err := dateutil.ParseDateArg(dateStr)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}

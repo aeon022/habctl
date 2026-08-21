@@ -1,7 +1,6 @@
 package models
 
 import (
-	"fmt"
 	"math"
 	"strings"
 	"time"
@@ -86,20 +85,6 @@ type WeeklyReview struct {
 	PerfectDays  int    // days this week where every habit was checked in
 	WeakestDay   string // e.g. "Mittwoch (23%)" — lowest completion weekday (30d)
 	StrongestDay string // e.g. "Montag (87%)" — highest completion weekday (30d)
-}
-
-// ParseDateArg parses a YYYY-MM-DD date string, defaulting to time.Now()
-// when s is empty. Shared by every check-in/uncheck/note command (CLI, MCP,
-// TUI) that takes an optional date flag or argument.
-func ParseDateArg(s string) (time.Time, error) {
-	if s == "" {
-		return time.Now(), nil
-	}
-	t, err := time.ParseInLocation("2006-01-02", s, time.Local)
-	if err != nil {
-		return time.Time{}, fmt.Errorf("invalid date %q — expected YYYY-MM-DD", s)
-	}
-	return t, nil
 }
 
 // StreakMilestone returns a short celebratory message for round-number

@@ -2,27 +2,6 @@ package models
 
 import "testing"
 
-// TestParseDateArg covers the three branches shared by every check/uncheck/
-// note command (CLI, MCP, TUI): empty input, a valid date, and an invalid
-// one.
-func TestParseDateArg(t *testing.T) {
-	if _, err := ParseDateArg(""); err != nil {
-		t.Errorf("empty string should default to now, got error: %v", err)
-	}
-
-	got, err := ParseDateArg("2026-08-21")
-	if err != nil {
-		t.Fatalf("valid date returned error: %v", err)
-	}
-	if got.Format("2006-01-02") != "2026-08-21" {
-		t.Errorf("got %s, want 2026-08-21", got.Format("2006-01-02"))
-	}
-
-	if _, err := ParseDateArg("not-a-date"); err == nil {
-		t.Error("expected error for invalid date, got nil")
-	}
-}
-
 func TestStreakMilestone(t *testing.T) {
 	for _, streak := range []int{7, 14, 21, 30, 60, 100} {
 		if ms := StreakMilestone(streak); ms == "" {

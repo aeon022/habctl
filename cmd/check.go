@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/aeon022/habctl/internal/models"
+	"github.com/aeon022/missionctl-core/dateutil"
 	"github.com/spf13/cobra"
 )
 
@@ -17,7 +18,7 @@ var checkCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name := args[0]
 
-		date, err := models.ParseDateArg(checkDate)
+		date, err := dateutil.ParseDateArg(checkDate)
 		if err != nil {
 			return err
 		}
