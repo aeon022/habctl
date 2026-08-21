@@ -6,6 +6,7 @@ import (
 
 	"github.com/aeon022/habctl/internal/ai"
 	"github.com/aeon022/habctl/internal/config"
+	"github.com/aeon022/habctl/internal/tui"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 )
@@ -49,11 +50,8 @@ Examples:
 			existing = append(existing, st.Habit.Name)
 		}
 
-		// Light/Dark pairs match habctl's own AdaptiveColor set in
-		// internal/tui/tui.go (colorLime/colorMuted) — this print path had
-		// drifted to the Dark-only hex, invisible on a light terminal.
-		lime := lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#65a30d", Dark: "#84cc16"}).Bold(true)
-		muted := lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#64748b", Dark: "#718096"})
+		lime := lipgloss.NewStyle().Foreground(tui.ColorLime).Bold(true)
+		muted := lipgloss.NewStyle().Foreground(tui.ColorMuted)
 
 		label := "Habit Suggestions"
 		if suggestRoutine != "" {

@@ -3,7 +3,6 @@ package tui
 import (
 	"context"
 	"fmt"
-	"math"
 	"os"
 	"os/exec"
 	"sort"
@@ -26,13 +25,16 @@ import (
 
 // ── colors ───────────────────────────────────────────────────────────────────
 
+// ColorLime, ColorMuted, ColorOk and ColorFg are exported so the
+// non-interactive print commands in cmd/ (suggest, today, review) can reuse
+// this same Light/Dark palette instead of re-declaring their own copies.
 var (
-	colorLime   = lipgloss.AdaptiveColor{Light: "#65a30d", Dark: "#84cc16"}
-	colorMuted  = lipgloss.AdaptiveColor{Light: "#64748b", Dark: "#718096"}
-	colorOk     = lipgloss.AdaptiveColor{Light: "#16a34a", Dark: "#4ade80"}
+	ColorLime   = lipgloss.AdaptiveColor{Light: "#65a30d", Dark: "#84cc16"}
+	ColorMuted  = lipgloss.AdaptiveColor{Light: "#64748b", Dark: "#718096"}
+	ColorOk     = lipgloss.AdaptiveColor{Light: "#16a34a", Dark: "#4ade80"}
 	colorWarn   = lipgloss.AdaptiveColor{Light: "#d97706", Dark: "#fbbf24"}
 	colorDanger = lipgloss.AdaptiveColor{Light: "#dc2626", Dark: "#f87171"}
-	colorFg     = lipgloss.AdaptiveColor{Light: "#1e293b", Dark: "#e2e8f0"}
+	ColorFg     = lipgloss.AdaptiveColor{Light: "#1e293b", Dark: "#e2e8f0"}
 	colorBorder = lipgloss.AdaptiveColor{Light: "#cbd5e1", Dark: "#1e1e2e"}
 	colorGroup  = lipgloss.AdaptiveColor{Light: "#0ea5e9", Dark: "#38bdf8"}
 	// colorHover previews the row under the mouse before a click commits
@@ -42,14 +44,14 @@ var (
 	// with its own color, distinct from lime/ok/warn/group.
 	colorHover = lipgloss.AdaptiveColor{Light: "#7c3aed", Dark: "#a78bfa"}
 
-	styleLime   = lipgloss.NewStyle().Foreground(colorLime)
-	styleMuted  = lipgloss.NewStyle().Foreground(colorMuted)
-	styleOk     = lipgloss.NewStyle().Foreground(colorOk)
-	styleOkBold = lipgloss.NewStyle().Foreground(colorOk).Bold(true)
+	styleLime   = lipgloss.NewStyle().Foreground(ColorLime)
+	styleMuted  = lipgloss.NewStyle().Foreground(ColorMuted)
+	styleOk     = lipgloss.NewStyle().Foreground(ColorOk)
+	styleOkBold = lipgloss.NewStyle().Foreground(ColorOk).Bold(true)
 	styleWarn   = lipgloss.NewStyle().Foreground(colorWarn)
 	styleWarnBd = lipgloss.NewStyle().Foreground(colorWarn).Bold(true)
 	styleDanger = lipgloss.NewStyle().Foreground(colorDanger)
-	styleFg     = lipgloss.NewStyle().Foreground(colorFg)
+	styleFg     = lipgloss.NewStyle().Foreground(ColorFg)
 	styleGroup  = lipgloss.NewStyle().Foreground(colorGroup).Bold(true)
 	styleHover  = lipgloss.NewStyle().Foreground(colorHover)
 
@@ -1421,7 +1423,7 @@ func (m model) handleHabitDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if stats.Streak >= 7 {
 				out += " 🔥"
 			}
-			if ms := streakMilestone(stats.Streak); ms != "" {
+			if ms := models.StreakMilestone(stats.Streak); ms != "" {
 				out += "  " + ms
 			}
 			if chainTo != "" && !chainToDone {
@@ -2521,7 +2523,7 @@ func (m model) renderList() string {
 	var borderColor lipgloss.AdaptiveColor
 	switch {
 	case total > 0 && done == total:
-		borderColor = colorOk
+		borderColor = ColorOk
 	case anyAtRisk:
 		borderColor = colorWarn
 	default:
@@ -2650,16 +2652,16 @@ func (m model) renderList() string {
 			switch {
 			case m.batchMode && m.batchSelected[h.Habit.Name]:
 				cb = styleLime.Render("[x]") + " "
-				ns = lipgloss.NewStyle().Foreground(colorFg).Bold(true)
+				ns = lipgloss.NewStyle().Foreground(ColorFg).Bold(true)
 			case m.batchMode:
 				cb = styleMuted.Render("[ ]") + " "
 				ns = styleMuted
 			case selected && h.CheckedToday:
 				cb = styleLime.Render("[✓]") + " "
-				ns = lipgloss.NewStyle().Foreground(colorFg).Bold(true)
+				ns = lipgloss.NewStyle().Foreground(ColorFg).Bold(true)
 			case selected:
 				cb = styleLime.Render("[·]") + " "
-				ns = lipgloss.NewStyle().Foreground(colorFg).Bold(true)
+				ns = lipgloss.NewStyle().Foreground(ColorFg).Bold(true)
 			case hovered && h.CheckedToday:
 				cb = styleHover.Render("[✓]") + " "
 				ns = styleHover
@@ -2999,10 +3001,10 @@ func (m model) renderGroupMgr() string {
 	} else {
 		for i, g := range m.groups {
 			cursor := "  "
-			labelStyle := lipgloss.NewStyle().Foreground(colorMuted)
+			labelStyle := lipgloss.NewStyle().Foreground(ColorMuted)
 			if i == m.groupCursor {
 				cursor = styleLime.Render("▶ ")
-				labelStyle = lipgloss.NewStyle().Foreground(colorFg)
+				labelStyle = lipgloss.NewStyle().Foreground(ColorFg)
 			}
 			icon := ""
 			if g.Icon != "" {
@@ -3054,10 +3056,10 @@ func (m model) renderGroupPick() string {
 	options := append([]models.Group{{Name: "None (ungrouped)", Icon: "○"}}, m.groups...)
 	for i, g := range options {
 		cursor := "  "
-		labelStyle := lipgloss.NewStyle().Foreground(colorMuted)
+		labelStyle := lipgloss.NewStyle().Foreground(ColorMuted)
 		if i == m.groupCursor {
 			cursor = styleLime.Render("▶ ")
-			labelStyle = lipgloss.NewStyle().Foreground(colorFg)
+			labelStyle = lipgloss.NewStyle().Foreground(ColorFg)
 		}
 		icon := ""
 		if g.Icon != "" {
@@ -3119,7 +3121,7 @@ func (m model) renderStats() string {
 		}
 	}
 
-	numV := lipgloss.NewStyle().Foreground(colorLime).Bold(true)
+	numV := lipgloss.NewStyle().Foreground(ColorLime).Bold(true)
 	lbl := styleMuted
 
 	b.WriteString(styleMuted.Render("// overview") + "\n")
@@ -3484,13 +3486,13 @@ func (m model) renderSettings() string {
 		var labelStyle lipgloss.Style
 		switch {
 		case selected && active:
-			labelStyle = lipgloss.NewStyle().Foreground(colorLime).Bold(true)
+			labelStyle = lipgloss.NewStyle().Foreground(ColorLime).Bold(true)
 		case selected:
-			labelStyle = lipgloss.NewStyle().Foreground(colorFg)
+			labelStyle = lipgloss.NewStyle().Foreground(ColorFg)
 		case active:
-			labelStyle = lipgloss.NewStyle().Foreground(colorLime)
+			labelStyle = lipgloss.NewStyle().Foreground(ColorLime)
 		default:
-			labelStyle = lipgloss.NewStyle().Foreground(colorMuted)
+			labelStyle = lipgloss.NewStyle().Foreground(ColorMuted)
 		}
 		label := labelStyle.Width(26).Render(p.label)
 
@@ -3570,10 +3572,10 @@ func (m model) renderGeminiMenu() string {
 	}
 	for i, o := range options {
 		cursor := "  "
-		ls := lipgloss.NewStyle().Foreground(colorMuted)
+		ls := lipgloss.NewStyle().Foreground(ColorMuted)
 		if i == m.geminiMenuCursor {
 			cursor = styleLime.Render("▶ ")
-			ls = lipgloss.NewStyle().Foreground(colorFg)
+			ls = lipgloss.NewStyle().Foreground(ColorFg)
 		}
 		b.WriteString(cursor + ls.Bold(true).Render(o.label) + "\n")
 		b.WriteString("    " + styleMuted.Render(o.desc) + "\n\n")
@@ -3626,7 +3628,7 @@ func (m model) renderOAuthWait() string {
 // renderHelpPopup) but kept as the content source both paths render.
 func (m model) helpContent() string {
 	lime := styleLime.Bold(true)
-	key := lipgloss.NewStyle().Foreground(colorLime).Width(26)
+	key := lipgloss.NewStyle().Foreground(ColorLime).Width(26)
 	desc := styleMuted
 
 	row := func(k, d string) string {
@@ -4258,7 +4260,7 @@ func toggleHabitCheckinCmd(s *store.Store, habits []models.HabitStats, idx int) 
 		if stats.Streak >= 7 {
 			out += " 🔥"
 		}
-		if ms := streakMilestone(stats.Streak); ms != "" {
+		if ms := models.StreakMilestone(stats.Streak); ms != "" {
 			out += "  " + ms
 		}
 		if chainTo != "" && !chainToDone {
@@ -4307,41 +4309,10 @@ func copyToClipboardCmd(text string) tea.Cmd {
 
 // ── util ─────────────────────────────────────────────────────────────────────
 
-func progressBar(done, total, width int) string {
-	if total == 0 {
-		return strings.Repeat("░", width)
-	}
-	filled := int(math.Round(float64(done) / float64(total) * float64(width)))
-	if filled > width {
-		filled = width
-	}
-	return strings.Repeat("█", filled) + strings.Repeat("░", width-filled)
-}
-
+// wordWrap wraps text to width, delegating to lipgloss (already a direct
+// dependency) instead of a hand-rolled word-wrap loop.
 func wordWrap(text string, width int) string {
-	var out strings.Builder
-	for _, line := range strings.Split(text, "\n") {
-		if len([]rune(line)) <= width {
-			out.WriteString(line + "\n")
-			continue
-		}
-		words := strings.Fields(line)
-		col := 0
-		for i, w := range words {
-			wl := len([]rune(w))
-			if i > 0 && col+1+wl > width {
-				out.WriteString("\n")
-				col = 0
-			} else if i > 0 {
-				out.WriteString(" ")
-				col++
-			}
-			out.WriteString(w)
-			col += wl
-		}
-		out.WriteString("\n")
-	}
-	return strings.TrimRight(out.String(), "\n")
+	return lipgloss.NewStyle().Width(width).Render(text)
 }
 
 func truncate(s string, n int) string {
@@ -4350,24 +4321,6 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return string(runes[:n-1]) + "…"
-}
-
-func streakMilestone(n int) string {
-	switch n {
-	case 7:
-		return "🎯 One week!"
-	case 14:
-		return "💪 Two weeks!"
-	case 21:
-		return "🧠 21 days!"
-	case 30:
-		return "🏆 One month!"
-	case 60:
-		return "🌟 60 days!"
-	case 100:
-		return "🎉 100 days!!"
-	}
-	return ""
 }
 
 func truncateDay(t time.Time) time.Time {

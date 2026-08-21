@@ -2,8 +2,8 @@ package cmd
 
 import (
 	"fmt"
-	"time"
 
+	"github.com/aeon022/habctl/internal/models"
 	"github.com/spf13/cobra"
 )
 
@@ -17,13 +17,9 @@ var checkCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name := args[0]
 
-		date := time.Now()
-		if checkDate != "" {
-			parsed, err := time.ParseInLocation("2006-01-02", checkDate, time.Local)
-			if err != nil {
-				return fmt.Errorf("invalid date %q — expected YYYY-MM-DD", checkDate)
-			}
-			date = parsed
+		date, err := models.ParseDateArg(checkDate)
+		if err != nil {
+			return err
 		}
 
 		s, err := openStore()
@@ -52,7 +48,7 @@ var checkCmd = &cobra.Command{
 			msg += " 🔥"
 		}
 		fmt.Println(msg)
-		if ms := streakMilestone(stats.Streak); ms != "" {
+		if ms := models.StreakMilestone(stats.Streak); ms != "" {
 			fmt.Println("  " + ms)
 		}
 		return nil
@@ -61,22 +57,4 @@ var checkCmd = &cobra.Command{
 
 func init() {
 	checkCmd.Flags().StringVar(&checkDate, "date", "", "Date to check in for (YYYY-MM-DD, default: today)")
-}
-
-func streakMilestone(streak int) string {
-	switch streak {
-	case 7:
-		return "🎯 One week! Keep it up!"
-	case 14:
-		return "💪 Two weeks strong!"
-	case 21:
-		return "🧠 21 days — you're building a real habit!"
-	case 30:
-		return "🏆 One month! Incredible."
-	case 60:
-		return "🌟 60 days! You're unstoppable."
-	case 100:
-		return "🎉 100 days!! Legendary."
-	}
-	return ""
 }

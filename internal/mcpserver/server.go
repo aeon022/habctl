@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/aeon022/habctl/internal/ai"
 	"github.com/aeon022/habctl/internal/config"
@@ -132,13 +131,9 @@ func handleCheckHabit(_ context.Context, req mcp.CallToolRequest) (*mcp.CallTool
 		return mcp.NewToolResultError("name is required"), nil
 	}
 
-	date := time.Now()
-	if dateStr != "" {
-		parsed, err := time.ParseInLocation("2006-01-02", dateStr, time.Local)
-		if err != nil {
-			return mcp.NewToolResultError("invalid date format, expected YYYY-MM-DD"), nil
-		}
-		date = parsed
+	date, err := models.ParseDateArg(dateStr)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
 	}
 
 	st, err := openStore()
@@ -160,7 +155,7 @@ func handleCheckHabit(_ context.Context, req mcp.CallToolRequest) (*mcp.CallTool
 	if stats.Streak >= 7 {
 		msg += " 🔥"
 	}
-	if ms := streakMilestone(stats.Streak); ms != "" {
+	if ms := models.StreakMilestone(stats.Streak); ms != "" {
 		msg += " " + ms
 	}
 	return mcp.NewToolResultText(msg), nil
@@ -355,7 +350,7 @@ func handleWeeklySummary(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToo
 		if s.TotalDays > 0 {
 			pct = s.TotalDays * 100 / 7
 		}
-		bar := progressBar(s.TotalDays, 7, 14)
+		bar := models.ProgressBar(s.TotalDays, 7, 14)
 		streakStr := fmt.Sprintf("%d", s.Streak)
 		if s.Streak >= 7 {
 			streakStr += " 🔥"
@@ -412,13 +407,9 @@ func handleAddCheckinNote(_ context.Context, req mcp.CallToolRequest) (*mcp.Call
 		return mcp.NewToolResultError("name is required"), nil
 	}
 
-	date := time.Now()
-	if dateStr != "" {
-		parsed, err := time.ParseInLocation("2006-01-02", dateStr, time.Local)
-		if err != nil {
-			return mcp.NewToolResultError("invalid date format, expected YYYY-MM-DD"), nil
-		}
-		date = parsed
+	date, err := models.ParseDateArg(dateStr)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
 	}
 
 	st, err := openStore()
@@ -445,13 +436,9 @@ func handleUncheckHabit(_ context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 		return mcp.NewToolResultError("name is required"), nil
 	}
 
-	date := time.Now()
-	if dateStr != "" {
-		parsed, err := time.ParseInLocation("2006-01-02", dateStr, time.Local)
-		if err != nil {
-			return mcp.NewToolResultError("invalid date format, expected YYYY-MM-DD"), nil
-		}
-		date = parsed
+	date, err := models.ParseDateArg(dateStr)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
 	}
 
 	st, err := openStore()
@@ -530,38 +517,9 @@ func formatStats(s models.HabitStats, days int) string {
 	if s.Streak >= 7 {
 		streakStr += " 🔥"
 	}
-	bar := progressBar(s.TotalDays, days, 20)
+	bar := models.ProgressBar(s.TotalDays, days, 20)
 	return fmt.Sprintf("%s (streak: %s)\n%s %d/%d days\n",
 		s.Habit.Name, streakStr, bar, s.TotalDays, days)
-}
-
-func progressBar(done, total, width int) string {
-	if total == 0 {
-		return "[" + strings.Repeat("░", width) + "]"
-	}
-	filled := (done * width) / total
-	if filled > width {
-		filled = width
-	}
-	return "[" + strings.Repeat("█", filled) + strings.Repeat("░", width-filled) + "]"
-}
-
-func streakMilestone(n int) string {
-	switch n {
-	case 7:
-		return "🎯 One week!"
-	case 14:
-		return "💪 Two weeks!"
-	case 21:
-		return "🧠 21 days!"
-	case 30:
-		return "🏆 One month!"
-	case 60:
-		return "🌟 60 days!"
-	case 100:
-		return "🎉 100 days!!"
-	}
-	return ""
 }
 
 // dbPathOverride, when non-empty, overrides the on-disk DB path. Used by tests to

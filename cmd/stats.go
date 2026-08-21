@@ -2,8 +2,8 @@ package cmd
 
 import (
 	"fmt"
-	"strings"
 
+	"github.com/aeon022/habctl/internal/models"
 	"github.com/spf13/cobra"
 )
 
@@ -37,23 +37,12 @@ var statsCmd = &cobra.Command{
 				streakStr += " 🔥"
 			}
 			fmt.Printf("  %s (%s)\n", st.Habit.Name, streakStr)
-			bar := progressBar(st.TotalDays, statsDays, 30)
+			bar := models.ProgressBar(st.TotalDays, statsDays, 30)
 			fmt.Printf("  %s %d/%d days\n\n", bar, st.TotalDays, statsDays)
 		}
 
 		return nil
 	},
-}
-
-func progressBar(done, total, width int) string {
-	if total == 0 {
-		return "[" + strings.Repeat("░", width) + "]"
-	}
-	filled := (done * width) / total
-	if filled > width {
-		filled = width
-	}
-	return "[" + strings.Repeat("█", filled) + strings.Repeat("░", width-filled) + "]"
 }
 
 func init() {
