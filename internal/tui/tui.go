@@ -2763,6 +2763,17 @@ func (m model) renderList() string {
 		b.WriteString(msgStyle.Render(m.message) + "\n\n")
 	}
 
+	// Pin the footer to the bottom of the panel instead of letting it
+	// glue itself right under a short habit list — pad the body out to
+	// the panel's full line budget first (panelStyle overhead: border
+	// 1+1, padding(1,2) → 4 rows), same pattern taskctl/notectl use.
+	if m.height > 0 {
+		budget := m.height - 4
+		for lines := strings.Count(b.String(), "\n") + 1; lines < budget; lines++ {
+			b.WriteString("\n")
+		}
+	}
+
 	fk := func(key, label string) string {
 		return styleLime.Render(key) + styleMuted.Render(":"+label)
 	}
