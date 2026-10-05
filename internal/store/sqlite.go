@@ -522,7 +522,35 @@ func (s *Store) computeStats(h models.Habit, days int) (models.HabitStats, error
 			}
 			streak++
 		}
-		longestStreak = streak // simplified: longest = current for now
+		// longest run of consecutive weeks meeting the target, over all history
+		// (same Monday-based weeks and >= target rule as the current streak).
+		weekCnt := map[time.Time]int{}
+		first := thisMonday
+		for _, ds := range dates {
+			t, err := time.ParseInLocation(dateLayout, ds, time.Local)
+			if err != nil {
+				continue
+			}
+			m := mondayOf(t)
+			weekCnt[m]++
+			if m.Before(first) {
+				first = m
+			}
+		}
+		run := 0
+		for w := first; !w.After(thisMonday); w = w.AddDate(0, 0, 7) {
+			if weekCnt[w] >= h.FreqTarget {
+				run++
+				if run > longestStreak {
+					longestStreak = run
+				}
+			} else {
+				run = 0
+			}
+		}
+		if streak > longestStreak {
+			longestStreak = streak
+		}
 	} else {
 		// daily habit (with optional skip forgiveness)
 		checkedToday = dateSet[todayStr]

@@ -366,3 +366,87 @@ func TestResolveDBPath(t *testing.T) {
 		t.Errorf("override = %q shared=%v", p, shared)
 	}
 }
+
+func weekly(t *testing.T, s *Store, name string, target int) {
+	t.Helper()
+	mustHabit(t, s, name)
+	if err := s.SetHabitFreq(name, target); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The longest weekly run must survive a later gap: 3 good weeks, a missed
+// week, then 1 good week → longest 3, current 1.
+func TestWeeklyLongestStreakKeepsHistoryAcrossGap(t *testing.T) {
+	s := testStore(t)
+	weekly(t, s, "Gym", 1)
+	mon := mondayOffset()
+	// weeks -6,-5,-4 good; -3 missed; -2 missed; -1 good (current week unmet)
+	mustCheck(t, s, "Gym", mon-42, mon-35, mon-28, mon-7)
+	st, _ := s.GetStats("Gym", 60)
+	if st.LongestStreak != 3 {
+		t.Errorf("longest = %d, want 3", st.LongestStreak)
+	}
+	if st.Streak != 1 {
+		t.Errorf("current = %d, want 1 (unmet this week must not break last week)", st.Streak)
+	}
+}
+
+// Target 3: weeks with only 2 check-ins break the run.
+func TestWeeklyLongestStreakNeedsFullTarget(t *testing.T) {
+	s := testStore(t)
+	weekly(t, s, "Lift", 3)
+	mon := mondayOffset()
+	mustCheck(t, s, "Lift",
+		mon-21, mon-20, mon-19, // week -3: 3 ✓
+		mon-14, mon-13, // week -2: only 2 ✗
+		mon-7, mon-6, mon-5, // week -1: 3 ✓
+	)
+	st, _ := s.GetStats("Lift", 60)
+	if st.LongestStreak != 1 {
+		t.Errorf("longest = %d, want 1 (partial week breaks the run)", st.LongestStreak)
+	}
+	if st.Streak != 1 {
+		t.Errorf("current = %d, want 1", st.Streak)
+	}
+}
+
+// Weeks run Monday..Sunday: a Sunday check-in belongs to the week that
+// started the Monday before it, not the following one.
+func TestWeeklyWeekBoundaryIsMondayToSunday(t *testing.T) {
+	s := testStore(t)
+	weekly(t, s, "Read", 2)
+	mon := mondayOffset()
+	// Sunday of week -2 (mon-8) + Monday of week -1 (mon-7) must NOT combine into one week.
+	mustCheck(t, s, "Read", mon-8, mon-7)
+	st, _ := s.GetStats("Read", 60)
+	if st.LongestStreak != 0 {
+		t.Errorf("longest = %d, want 0: Sunday and the next Monday are different weeks", st.LongestStreak)
+	}
+	// Mon+Sun of the same week do count together.
+	mustCheck(t, s, "Read", mon-14, mon-8)
+	st, _ = s.GetStats("Read", 60)
+	if st.LongestStreak != 1 {
+		t.Errorf("longest = %d, want 1 (Mon..Sun of week -2)", st.LongestStreak)
+	}
+}
+
+func TestWeeklyLongestIsAtLeastCurrent(t *testing.T) {
+	s := testStore(t)
+	weekly(t, s, "Walk", 1)
+	mon := mondayOffset()
+	mustCheck(t, s, "Walk", mon-7, 0) // last week + this week
+	st, _ := s.GetStats("Walk", 30)
+	if st.Streak != 2 || st.LongestStreak != 2 {
+		t.Errorf("streak=%d longest=%d, want 2/2", st.Streak, st.LongestStreak)
+	}
+}
+
+func TestWeeklyNoCheckinsIsZero(t *testing.T) {
+	s := testStore(t)
+	weekly(t, s, "None", 2)
+	st, _ := s.GetStats("None", 30)
+	if st.Streak != 0 || st.LongestStreak != 0 {
+		t.Errorf("streak=%d longest=%d, want 0/0", st.Streak, st.LongestStreak)
+	}
+}
