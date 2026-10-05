@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"os"
 
+	"charm.land/lipgloss/v2"
 	"github.com/aeon022/habctl/internal/ai"
 	"github.com/aeon022/habctl/internal/config"
 	"github.com/aeon022/habctl/internal/tui"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 )
 

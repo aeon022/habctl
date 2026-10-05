@@ -4,11 +4,10 @@ import (
 	"strings"
 	"testing"
 
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/aeon022/habctl/internal/models"
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
-	"github.com/muesli/termenv"
 )
 
 func newTestModel() model {
@@ -58,14 +57,14 @@ func TestMatchPaletteCommands_NoMatch(t *testing.T) {
 func TestHandleCommandPalette_OpenFilterEsc(t *testing.T) {
 	m := newTestModel()
 
-	mi, _ := m.handleList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(":")})
+	mi, _ := m.handleList(tea.KeyPressMsg{Text: ":", Code: []rune(":")[0]})
 	m = mi.(model)
 	if m.state != viewCommand {
 		t.Fatalf("expected viewCommand after ':', got %v", m.state)
 	}
 
 	for _, r := range "arch" {
-		mi, _ = m.handleCommandPalette(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		mi, _ = m.handleCommandPalette(tea.KeyPressMsg{Text: string(r), Code: r})
 		m = mi.(model)
 	}
 	matches := matchPaletteCommands(m.input.Value())
@@ -73,7 +72,7 @@ func TestHandleCommandPalette_OpenFilterEsc(t *testing.T) {
 		t.Fatalf("expected \"archive\" to be the top match for \"arch\", got %+v", matches)
 	}
 
-	mi, _ = m.handleCommandPalette(tea.KeyMsg{Type: tea.KeyEsc})
+	mi, _ = m.handleCommandPalette(tea.KeyPressMsg{Code: tea.KeyEscape})
 	m = mi.(model)
 	if m.state != viewList {
 		t.Errorf("expected esc to cancel back to viewList, got %v", m.state)
@@ -87,13 +86,13 @@ func TestHandleCommandPalette_EnterDispatchesMappedKey(t *testing.T) {
 	// "help" maps to the same "?" keypress handleList already handles, and
 	// doesn't touch the (nil, in this test) store — safe to exercise fully.
 	m := newTestModel()
-	mi, _ := m.handleList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(":")})
+	mi, _ := m.handleList(tea.KeyPressMsg{Text: ":", Code: []rune(":")[0]})
 	m = mi.(model)
 	for _, r := range "help" {
-		mi, _ = m.handleCommandPalette(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		mi, _ = m.handleCommandPalette(tea.KeyPressMsg{Text: string(r), Code: r})
 		m = mi.(model)
 	}
-	mi, _ = m.handleCommandPalette(tea.KeyMsg{Type: tea.KeyEnter})
+	mi, _ = m.handleCommandPalette(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = mi.(model)
 	if m.state != viewHelp {
 		t.Errorf("expected \"help\" command to dispatch to viewHelp, got %v", m.state)
@@ -109,14 +108,14 @@ func TestHandleCommandPalette_ArrowNavigationStaysInBounds(t *testing.T) {
 		t.Fatal("test assumes at least 2 matches for \"s\"")
 	}
 
-	mi, _ := m.handleCommandPalette(tea.KeyMsg{Type: tea.KeyUp})
+	mi, _ := m.handleCommandPalette(tea.KeyPressMsg{Code: tea.KeyUp})
 	m = mi.(model)
 	if m.cmdCursor != 0 {
 		t.Errorf("up at cursor 0 should stay at 0, got %d", m.cmdCursor)
 	}
 
 	for i := 0; i < len(matches)+3; i++ {
-		mi, _ = m.handleCommandPalette(tea.KeyMsg{Type: tea.KeyDown})
+		mi, _ = m.handleCommandPalette(tea.KeyPressMsg{Code: tea.KeyDown})
 		m = mi.(model)
 	}
 	if m.cmdCursor != len(matches)-1 {
@@ -214,7 +213,6 @@ func TestHighlightMatches_PreservesBaseStyleAfterHighlight(t *testing.T) {
 	// highlighted character, because every Render() call ends with a full
 	// SGR reset. highlightMatches must render per-character instead so the
 	// base style survives past a highlighted run.
-	lipgloss.SetColorProfile(termenv.ANSI256)
 	base := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("189"))
 
 	out := highlightMatches("abRuncd", []int{2, 3, 4}, base)

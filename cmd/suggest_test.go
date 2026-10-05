@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"charm.land/lipgloss/v2"
 	"github.com/aeon022/habctl/internal/ai"
-	"github.com/charmbracelet/lipgloss"
 )
 
 // captureStdout runs fn with os.Stdout redirected to a pipe and returns

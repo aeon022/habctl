@@ -4,12 +4,17 @@ import (
 	"context"
 	"fmt"
 	"github.com/aeon022/missionctl-core/humanize"
+	"image/color"
 	"os"
 	"os/exec"
 	"sort"
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/textinput"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/aeon022/habctl/internal/ai"
 	"github.com/aeon022/habctl/internal/auth"
 	"github.com/aeon022/habctl/internal/config"
@@ -17,33 +22,37 @@ import (
 	"github.com/aeon022/habctl/internal/store"
 	"github.com/aeon022/missionctl-core/overlay"
 	"github.com/aeon022/missionctl-core/uistate"
-	"github.com/charmbracelet/bubbles/textinput"
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/sahilm/fuzzy"
 )
 
 // ── colors ───────────────────────────────────────────────────────────────────
 
+// Adaptive resolves a light/dark color pair once, at startup — v2 dropped
+// AdaptiveColor, and the package-level styles below are built once, not per
+// render. Exported so cmd/ can share it.
+var Adaptive = func() func(light, dark string) color.Color {
+	pick := lipgloss.LightDark(lipgloss.HasDarkBackground(os.Stdin, os.Stdout))
+	return func(light, dark string) color.Color { return pick(lipgloss.Color(light), lipgloss.Color(dark)) }
+}()
+
 // ColorLime, ColorMuted, ColorOk and ColorFg are exported so the
 // non-interactive print commands in cmd/ (suggest, today, review) can reuse
 // this same Light/Dark palette instead of re-declaring their own copies.
 var (
-	ColorLime   = lipgloss.AdaptiveColor{Light: "#65a30d", Dark: "#84cc16"}
-	ColorMuted  = lipgloss.AdaptiveColor{Light: "#64748b", Dark: "#718096"}
-	ColorOk     = lipgloss.AdaptiveColor{Light: "#16a34a", Dark: "#4ade80"}
-	colorWarn   = lipgloss.AdaptiveColor{Light: "#d97706", Dark: "#fbbf24"}
-	colorDanger = lipgloss.AdaptiveColor{Light: "#dc2626", Dark: "#f87171"}
-	ColorFg     = lipgloss.AdaptiveColor{Light: "#1e293b", Dark: "#e2e8f0"}
-	colorBorder = lipgloss.AdaptiveColor{Light: "#cbd5e1", Dark: "#1e1e2e"}
-	colorGroup  = lipgloss.AdaptiveColor{Light: "#0ea5e9", Dark: "#38bdf8"}
+	ColorLime   = Adaptive("#65a30d", "#84cc16")
+	ColorMuted  = Adaptive("#64748b", "#718096")
+	ColorOk     = Adaptive("#16a34a", "#4ade80")
+	colorWarn   = Adaptive("#d97706", "#fbbf24")
+	colorDanger = Adaptive("#dc2626", "#f87171")
+	ColorFg     = Adaptive("#1e293b", "#e2e8f0")
+	colorBorder = Adaptive("#cbd5e1", "#1e1e2e")
+	colorGroup  = Adaptive("#0ea5e9", "#38bdf8")
 	// colorHover previews the row under the mouse before a click commits
 	// it as the selection. habctl doesn't use a background-fill selection
 	// style like the rest of the suite (its cursor row is marked by
 	// checkbox/name color alone) — hover follows that same convention
 	// with its own color, distinct from lime/ok/warn/group.
-	colorHover = lipgloss.AdaptiveColor{Light: "#7c3aed", Dark: "#a78bfa"}
+	colorHover = Adaptive("#7c3aed", "#a78bfa")
 
 	styleLime   = lipgloss.NewStyle().Foreground(ColorLime)
 	styleMuted  = lipgloss.NewStyle().Foreground(ColorMuted)
@@ -65,11 +74,11 @@ var (
 	// Stats heatmap and the per-habit detail heatmap, so both read as the
 	// same visual language rather than two slightly different scales.
 	heatColors = [5]lipgloss.Style{
-		lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#cbd5e1", Dark: "#2d3748"}),
-		lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#86efac", Dark: "#276749"}),
-		lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#4ade80", Dark: "#38a169"}),
-		lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#22c55e", Dark: "#48bb78"}),
-		lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#16a34a", Dark: "#68d391"}),
+		lipgloss.NewStyle().Foreground(Adaptive("#cbd5e1", "#2d3748")),
+		lipgloss.NewStyle().Foreground(Adaptive("#86efac", "#276749")),
+		lipgloss.NewStyle().Foreground(Adaptive("#4ade80", "#38a169")),
+		lipgloss.NewStyle().Foreground(Adaptive("#22c55e", "#48bb78")),
+		lipgloss.NewStyle().Foreground(Adaptive("#16a34a", "#68d391")),
 	}
 )
 
@@ -407,9 +416,27 @@ func Run(s *store.Store) error {
 	}
 
 	m := model{s: s, input: ti, cfg: cfg, hoverRow: -1, lastClickRow: -1, weekView: state.WeekView, compact: state.Compact}
-	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseAllMotion(), tea.WithInput(os.Stdin), tea.WithOutput(os.Stdout))
+	// WithFPS(30) + motionThrottleFilter: all-motion mouse mode re-renders on
+	// every pixel of movement, which at 60fps can overwhelm the terminal.
+	p := tea.NewProgram(m, tea.WithFilter(motionThrottleFilter()), tea.WithFPS(30), tea.WithInput(os.Stdin), tea.WithOutput(os.Stdout))
 	_, err := p.Run()
 	return err
+}
+
+// motionThrottleFilter drops MouseMotionMsg messages arriving <16ms apart.
+func motionThrottleFilter() func(tea.Model, tea.Msg) tea.Msg {
+	var lastMotion time.Time
+	return func(_ tea.Model, msg tea.Msg) tea.Msg {
+		if _, ok := msg.(tea.MouseMotionMsg); !ok {
+			return msg
+		}
+		now := time.Now()
+		if now.Sub(lastMotion) < 16*time.Millisecond {
+			return nil
+		}
+		lastMotion = now
+		return msg
+	}
 }
 
 // persistedState is what Run restores from and saveUIState saves to — see
@@ -445,20 +472,25 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		return m, nil
 
-	case tea.MouseMsg:
+	case tea.MouseWheelMsg:
 		switch msg.Button {
-		case tea.MouseButtonWheelUp:
+		case tea.MouseWheelUp:
 			if m.state == viewList && m.cursor > 0 {
 				m.cursor--
 			}
-		case tea.MouseButtonWheelDown:
+		case tea.MouseWheelDown:
 			if m.state == viewList && m.cursor < len(m.habits)-1 {
 				m.cursor++
 			}
-		case tea.MouseButtonLeft:
-			if msg.Action != tea.MouseActionPress || m.state != viewList {
-				return m, nil
-			}
+		}
+		return m, nil
+
+	case tea.MouseClickMsg:
+		if m.state != viewList {
+			return m, nil
+		}
+		switch msg.Button {
+		case tea.MouseLeft:
 			if i := m.rowHitTest(msg.Y); i >= 0 {
 				now := time.Now()
 				if i == m.lastClickRow && now.Sub(m.lastClickAt) < doubleClickWindow {
@@ -472,19 +504,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.lastClickRow = i
 				m.lastClickAt = now
 			}
-		case tea.MouseButtonRight:
-			if msg.Action != tea.MouseActionPress || m.state != viewList {
-				return m, nil
-			}
+		case tea.MouseRight:
 			// Toggle check-in on whatever row was clicked, not the cursor
 			// row — a quick-action shouldn't require selecting first.
 			if i := m.rowHitTest(msg.Y); i >= 0 {
 				return m, toggleHabitCheckinCmd(m.s, m.habits, i)
 			}
-		case tea.MouseButtonNone:
-			if msg.Action == tea.MouseActionMotion && m.state == viewList {
-				m.hoverRow = m.rowHitTest(msg.Y)
-			}
+		}
+		return m, nil
+
+	case tea.MouseMotionMsg:
+		if m.state == viewList {
+			m.hoverRow = m.rowHitTest(msg.Y)
 		}
 		return m, nil
 
@@ -644,7 +675,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.isErr = true
 		return m, clearAfter()
 
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		switch m.state {
 		case viewHelp:
 			return m.handleHelp(msg)
@@ -719,7 +750,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // ── key handlers ─────────────────────────────────────────────────────────────
 
-func (m model) handleList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handleList(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.batchMode {
 		switch msg.String() {
 		case "esc":
@@ -1120,7 +1151,7 @@ func (m model) handleList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) handleAddInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handleAddInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
 		m.state = viewList
@@ -1148,7 +1179,7 @@ func (m model) handleAddInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m model) handleAddDesc(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handleAddDesc(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc", "enter":
 		desc := ""
@@ -1171,7 +1202,7 @@ func (m model) handleAddDesc(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m model) handleEditHabit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handleEditHabit(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
 		return m, tea.Quit
@@ -1258,7 +1289,7 @@ func (m model) handleEditHabit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) handleGroupMgr(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handleGroupMgr(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
 		return m, tea.Quit
@@ -1320,7 +1351,7 @@ func (m model) handleGroupMgr(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) handleGroupNew(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handleGroupNew(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
 		return m, tea.Quit
@@ -1351,7 +1382,7 @@ func (m model) handleGroupNew(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m model) handleGroupPick(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handleGroupPick(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// +1 because index 0 = "Kein" (ungrouped)
 	total := len(m.groups) + 1
 	switch msg.String() {
@@ -1388,7 +1419,7 @@ func (m model) handleGroupPick(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) handleHabitDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handleHabitDetail(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
 		return m, tea.Quit
@@ -1473,7 +1504,7 @@ func (m model) handleHabitDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) handleReview(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handleReview(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
 		return m, tea.Quit
@@ -1486,7 +1517,7 @@ func (m model) handleReview(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) handleNoteInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handleNoteInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
 		return m, tea.Quit
@@ -1513,7 +1544,7 @@ func (m model) handleNoteInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m model) handleChainMgr(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handleChainMgr(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
 		return m, tea.Quit
@@ -1615,7 +1646,7 @@ func (m model) handleChainMgr(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) handleChainPick(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handleChainPick(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
 		return m, tea.Quit
@@ -1656,7 +1687,7 @@ func (m model) handleChainPick(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // handleFilterInput drives the "/" habit filter (filters live while typing).
-func (m model) handleFilterInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handleFilterInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
 		return m, tea.Quit
@@ -1680,7 +1711,7 @@ func (m model) handleFilterInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m model) handleCommandPalette(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handleCommandPalette(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	closeCmd := func(mm model) model {
 		mm.state = viewList
 		mm.input.Blur()
@@ -1717,7 +1748,7 @@ func (m model) handleCommandPalette(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		chosen := matches[m.cmdCursor]
 		m = closeCmd(m)
-		return m.handleList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(chosen.key)})
+		return m.handleList(tea.KeyPressMsg{Text: chosen.key, Code: []rune(chosen.key)[0]})
 	}
 
 	var cmd tea.Cmd
@@ -1817,7 +1848,7 @@ func (m model) askConfirm(prompt string, action tea.Cmd) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) handleConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handleConfirm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
 		return m, tea.Quit
@@ -1843,7 +1874,7 @@ func (m model) renderConfirm() string {
 	return m.panel(b.String())
 }
 
-func (m model) handleArchive(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handleArchive(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
 		return m, tea.Quit
@@ -1911,7 +1942,7 @@ var habitPresets = []habitPreset{
 	{"💰", "Track spending", "Log today's expenses"},
 }
 
-func (m model) handlePresets(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handlePresets(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
 		return m, tea.Quit
@@ -1939,7 +1970,7 @@ func (m model) handlePresets(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) handleGoalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handleGoalInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
 		return m, tea.Quit
@@ -2002,7 +2033,7 @@ func (m model) handleGoalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m model) handleHelp(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handleHelp(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
 		return m, tea.Quit
@@ -2015,7 +2046,7 @@ func (m model) handleHelp(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m model) handleSuggest(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handleSuggest(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
 		return m, tea.Quit
@@ -2159,7 +2190,7 @@ func (m model) handleSuggest(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) handleStats(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handleStats(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
 		return m, tea.Quit
@@ -2169,7 +2200,7 @@ func (m model) handleStats(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) handleSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handleSettings(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
 		return m, tea.Quit
@@ -2208,7 +2239,7 @@ func (m model) handleSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) handleGeminiMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handleGeminiMenu(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
 		return m, tea.Quit
@@ -2246,7 +2277,7 @@ func (m model) handleGeminiMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) handleGeminiCID(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handleGeminiCID(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
 		return m, tea.Quit
@@ -2271,7 +2302,7 @@ func (m model) handleGeminiCID(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m model) handleGeminiCS(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handleGeminiCS(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
 		return m, tea.Quit
@@ -2298,7 +2329,7 @@ func (m model) handleGeminiCS(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m model) handleKeyInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handleKeyInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
 		return m, tea.Quit
@@ -2340,7 +2371,16 @@ func (m model) handleKeyInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // ── view ──────────────────────────────────────────────────────────────────────
 
-func (m model) View() string {
+func (m model) View() tea.View {
+	v := tea.NewView(m.viewContent())
+	// v1's WithAltScreen()/WithMouseAllMotion() Program options are gone in
+	// v2 — they are per-View fields now.
+	v.AltScreen = true
+	v.MouseMode = tea.MouseModeAllMotion
+	return v
+}
+
+func (m model) viewContent() string {
 	switch m.state {
 	case viewHelp:
 		// "?" is only reachable from the main list (handleList), so the list
@@ -2438,7 +2478,7 @@ func tinyBar(done, total, width int) string {
 }
 
 // dynamicPanel renders a panel with a custom border color.
-func (m model) dynamicPanel(s string, bc lipgloss.AdaptiveColor) string {
+func (m model) dynamicPanel(s string, bc color.Color) string {
 	w := m.width - 2
 	if w < 62 {
 		w = 62
@@ -2521,7 +2561,7 @@ func (m model) renderList() string {
 			}
 		}
 	}
-	var borderColor lipgloss.AdaptiveColor
+	var borderColor color.Color
 	switch {
 	case total > 0 && done == total:
 		borderColor = ColorOk
@@ -3713,7 +3753,7 @@ func (m model) openHelp() model {
 
 	// panelStyle overhead: border 1+1, padding(1,2) → 2 rows, 4 cols; -1 more
 	// row reserved for the footer (scroll/close hint) below the viewport.
-	vp := viewport.New(popW-6, popH-5)
+	vp := viewport.New(viewport.WithWidth(popW-6), viewport.WithHeight(popH-5))
 	vp.SetContent(m.helpContent())
 
 	m.helpVP = vp
@@ -3728,7 +3768,7 @@ func (m model) openHelp() model {
 // whole screen — the list stays visible around it.
 func (m model) renderHelpPopup() string {
 	footer := "esc / ?  close"
-	if m.helpVP.TotalLineCount() > m.helpVP.Height {
+	if m.helpVP.TotalLineCount() > m.helpVP.Height() {
 		footer = fmt.Sprintf("j/k scroll (%d%%)  ·  %s", int(m.helpVP.ScrollPercent()*100), footer)
 	}
 	body := m.helpVP.View() + "\n" + styleMuted.Render(footer)
