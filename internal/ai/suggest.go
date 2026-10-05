@@ -269,15 +269,15 @@ func SuggestChains(ctx context.Context, habits []string, out func(string)) (stri
 func detectForced(p Provider) (ProviderInfo, error) {
 	switch p {
 	case ProviderAnthropic:
-		return ProviderInfo{ProviderAnthropic, "claude-haiku-4-5-20251001", "Claude Haiku (Anthropic)"}, nil
+		return ProviderInfo{Name: ProviderAnthropic, Model: "claude-haiku-4-5-20251001", Display: "Claude Haiku (Anthropic)"}, nil
 	case ProviderOpenAI:
-		return ProviderInfo{ProviderOpenAI, "gpt-4o-mini", "GPT-4o mini (OpenAI)"}, nil
+		return ProviderInfo{Name: ProviderOpenAI, Model: "gpt-4o-mini", Display: "GPT-4o mini (OpenAI)"}, nil
 	case ProviderGemini:
 		model := os.Getenv("GEMINI_MODEL")
 		if model == "" {
 			model = "gemini-flash-latest"
 		}
-		return ProviderInfo{ProviderGemini, model, "Gemini " + model + " (Google)"}, nil
+		return ProviderInfo{Name: ProviderGemini, Model: model, Display: "Gemini " + model + " (Google)"}, nil
 	case ProviderOllama:
 		// Was hardcoded to "llama3.2" regardless of OLLAMA_MODEL — Detect()
 		// and SuggestOllama() both already checked it, but --provider
@@ -292,7 +292,7 @@ func detectForced(p Provider) (ProviderInfo, error) {
 		if model == "" {
 			model = "llama3.2"
 		}
-		return ProviderInfo{ProviderOllama, model, "Ollama (" + model + ", local)"}, nil
+		return ProviderInfo{Name: ProviderOllama, Model: model, Display: "Ollama (" + model + ", local)"}, nil
 	}
 	return ProviderInfo{}, fmt.Errorf("unknown provider %q", p)
 }

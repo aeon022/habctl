@@ -4,13 +4,11 @@ go 1.26.5
 
 require (
 	github.com/aeon022/missionctl-core v0.0.0-20260821141714-32739ffedc1f
-	github.com/anthropics/anthropic-sdk-go v1.57.0
 	github.com/charmbracelet/bubbles v1.0.0
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/mark3labs/mcp-go v0.55.1
 	github.com/muesli/termenv v0.16.0
-	github.com/openai/openai-go v1.12.0
 	github.com/sahilm/fuzzy v0.1.3
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/oauth2 v0.36.0
@@ -19,6 +17,7 @@ require (
 
 require (
 	cloud.google.com/go/compute/metadata v0.5.0 // indirect
+	github.com/anthropics/anthropic-sdk-go v1.57.0 // indirect
 	github.com/atotto/clipboard v0.1.4 // indirect
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
@@ -42,6 +41,7 @@ require (
 	github.com/muesli/ansi v0.0.0-20230316100256-276c6243b2f6 // indirect
 	github.com/muesli/cancelreader v0.2.2 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
+	github.com/openai/openai-go v1.12.0 // indirect
 	github.com/pb33f/ordered-map/v2 v2.3.1 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
