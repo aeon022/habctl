@@ -74,9 +74,9 @@ Examples:
 			providerLabel = muted.Render("via " + info.Display)
 		}
 
-		fmt.Println()
-		fmt.Println(lime.Render("habctl suggest") + "  " + muted.Render(label) + "  " + providerLabel)
-		fmt.Println()
+		fmt.Fprintln(out)
+		fmt.Fprintln(out, lime.Render("habctl suggest")+"  "+muted.Render(label)+"  "+providerLabel)
+		fmt.Fprintln(out)
 
 		req := ai.SuggestRequest{
 			ExistingHabits: existing,
@@ -86,17 +86,17 @@ Examples:
 		}
 
 		raw, err := ai.SuggestWithProvider(req, ai.Provider(suggestProvider), func(chunk string) {
-			fmt.Print(chunk)
+			fmt.Fprint(out, chunk)
 			os.Stdout.Sync()
 		})
 		if err != nil {
 			return fmt.Errorf("could not generate suggestions: %w", err)
 		}
 
-		fmt.Println()
-		fmt.Println()
+		fmt.Fprintln(out)
+		fmt.Fprintln(out)
 		printAddHints(raw, muted, lime)
-		fmt.Println()
+		fmt.Fprintln(out)
 		return nil
 	},
 }
@@ -118,7 +118,7 @@ Examples:
 func printAddHints(raw string, muted, lime lipgloss.Style) {
 	suggestions := ai.ParseSuggestions(raw)
 	if len(suggestions) == 0 {
-		fmt.Println(muted.Render("Add with: habctl add \"<name>\""))
+		fmt.Fprintln(out, muted.Render("Add with: habctl add \"<name>\""))
 		return
 	}
 	if err := ai.SaveLastSuggestions(suggestions); err != nil {
@@ -126,9 +126,9 @@ func printAddHints(raw string, muted, lime lipgloss.Style) {
 		// the plain-name form printed below still works either way.
 		fmt.Fprintf(os.Stderr, "warning: could not cache suggestions for \"habctl add <N>\": %v\n", err)
 	}
-	fmt.Println(muted.Render("Add with:"))
+	fmt.Fprintln(out, muted.Render("Add with:"))
 	for i, s := range suggestions {
-		fmt.Println(lime.Render(fmt.Sprintf("  habctl add %d", i+1)) + muted.Render("   "+s.Name))
+		fmt.Fprintln(out, lime.Render(fmt.Sprintf("  habctl add %d", i+1))+muted.Render("   "+s.Name))
 	}
 }
 

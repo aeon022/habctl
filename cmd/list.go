@@ -36,29 +36,29 @@ var listCmd = &cobra.Command{
 		}
 
 		if len(allStats) == 0 {
-			fmt.Println("No habits yet. Add one with: habctl add \"<name>\"")
+			fmt.Fprintln(out, "No habits yet. Add one with: habctl add \"<name>\"")
 			return nil
 		}
 
 		switch listFormat {
 		case "diary":
-			fmt.Println("## Habits")
+			fmt.Fprintln(out, "## Habits")
 			for _, st := range allStats {
 				if st.CheckedToday {
 					if st.Streak > 1 {
-						fmt.Printf("- [x] %s (streak: %d)\n", st.Habit.Name, st.Streak)
+						fmt.Fprintf(out, "- [x] %s (streak: %d)\n", st.Habit.Name, st.Streak)
 					} else {
-						fmt.Printf("- [x] %s\n", st.Habit.Name)
+						fmt.Fprintf(out, "- [x] %s\n", st.Habit.Name)
 					}
 				} else {
-					fmt.Printf("- [ ] %s\n", st.Habit.Name)
+					fmt.Fprintf(out, "- [ ] %s\n", st.Habit.Name)
 				}
 			}
 
 		default:
-			fmt.Println()
-			fmt.Println("  " + styleHeader.Render("Habits"))
-			fmt.Println()
+			fmt.Fprintln(out)
+			fmt.Fprintln(out, "  "+styleHeader.Render("Habits"))
+			fmt.Fprintln(out)
 
 			for _, st := range allStats {
 				mark := styleMuted.Render("✗ today")
@@ -89,14 +89,14 @@ var listCmd = &cobra.Command{
 					}
 				}
 
-				fmt.Printf("  %-20s  %s   %-22s  last: %s\n",
+				fmt.Fprintf(out, "  %-20s  %s   %-22s  last: %s\n",
 					nameStyle.Render(st.Habit.Name),
 					mark,
 					streakStr,
 					lastStr,
 				)
 			}
-			fmt.Println()
+			fmt.Fprintln(out)
 		}
 
 		return nil

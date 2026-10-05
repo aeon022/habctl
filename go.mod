@@ -7,6 +7,7 @@ require (
 	charm.land/bubbletea/v2 v2.0.9
 	charm.land/lipgloss/v2 v2.0.6
 	github.com/aeon022/missionctl-core v0.0.0-20261005114642-5936b006965e
+	github.com/charmbracelet/colorprofile v0.4.3
 	github.com/mark3labs/mcp-go v0.55.1
 	github.com/sahilm/fuzzy v0.1.3
 	github.com/spf13/cobra v1.10.2
@@ -21,7 +22,6 @@ require (
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/buger/jsonparser v1.1.2 // indirect
-	github.com/charmbracelet/colorprofile v0.4.3 // indirect
 	github.com/charmbracelet/lipgloss v1.1.0 // indirect
 	github.com/charmbracelet/ultraviolet v0.0.0-20260811164956-006e29f97886 // indirect
 	github.com/charmbracelet/x/ansi v0.11.8 // indirect

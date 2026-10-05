@@ -59,7 +59,7 @@ var todayCmd = &cobra.Command{
 		}
 
 		if len(allStats) == 0 {
-			fmt.Println("No habits yet. Add one with: habctl add \"<name>\"")
+			fmt.Fprintln(out, "No habits yet. Add one with: habctl add \"<name>\"")
 			return nil
 		}
 
@@ -68,8 +68,8 @@ var todayCmd = &cobra.Command{
 		ok := lipgloss.NewStyle().Foreground(tui.ColorOk)
 		bold := lipgloss.NewStyle().Bold(true).Foreground(tui.ColorFg)
 
-		fmt.Println()
-		fmt.Printf("  %s  %s\n\n",
+		fmt.Fprintln(out)
+		fmt.Fprintf(out, "  %s  %s\n\n",
 			lime.Bold(true).Render("Today's Habits"),
 			muted.Render(fmt.Sprintf("%d / %d done", done, total)),
 		)
@@ -83,21 +83,21 @@ var todayCmd = &cobra.Command{
 						streakStr += " 🔥"
 					}
 				}
-				fmt.Printf("  %s %s%s\n", ok.Render("✓"), bold.Render(st.Habit.Name), streakStr)
+				fmt.Fprintf(out, "  %s %s%s\n", ok.Render("✓"), bold.Render(st.Habit.Name), streakStr)
 			} else {
-				fmt.Printf("  %s %s\n", muted.Render("–"), muted.Render(st.Habit.Name))
+				fmt.Fprintf(out, "  %s %s\n", muted.Render("–"), muted.Render(st.Habit.Name))
 			}
 		}
 
 		if done == total && total > 0 {
-			fmt.Println()
-			fmt.Println("  " + lime.Bold(true).Render("All habits done today! 🎉"))
+			fmt.Fprintln(out)
+			fmt.Fprintln(out, "  "+lime.Bold(true).Render("All habits done today! 🎉"))
 		} else if done == 0 {
-			fmt.Println()
-			fmt.Println("  " + muted.Render("No check-ins yet today."))
+			fmt.Fprintln(out)
+			fmt.Fprintln(out, "  "+muted.Render("No check-ins yet today."))
 		}
 
-		fmt.Println()
+		fmt.Fprintln(out)
 		return nil
 	},
 }

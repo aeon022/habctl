@@ -46,15 +46,15 @@ In TUI: press r.`,
 			return fmt.Errorf("no AI provider configured — %w", detErr)
 		}
 
-		fmt.Println()
-		fmt.Println(lime.Render("habctl review") + "  " + providerLabel)
-		fmt.Println()
+		fmt.Fprintln(out)
+		fmt.Fprintln(out, lime.Render("habctl review")+"  "+providerLabel)
+		fmt.Fprintln(out)
 
 		_, err = ai.Review(context.Background(), data, func(chunk string) {
 			if strings.HasPrefix(chunk, "## ") {
-				fmt.Print(lime.Render(strings.TrimPrefix(chunk, "## ")))
+				fmt.Fprint(out, lime.Render(strings.TrimPrefix(chunk, "## ")))
 			} else {
-				fmt.Print(chunk)
+				fmt.Fprint(out, chunk)
 			}
 			os.Stdout.Sync()
 		})
@@ -62,8 +62,8 @@ In TUI: press r.`,
 			return fmt.Errorf("review failed: %w", err)
 		}
 
-		fmt.Println()
-		fmt.Println()
+		fmt.Fprintln(out)
+		fmt.Fprintln(out)
 		return nil
 	},
 }
