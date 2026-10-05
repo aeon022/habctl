@@ -187,14 +187,15 @@ func clearAfterUndo() tea.Cmd {
 	})
 }
 
-// copyToClipboardCmd shells out to pbcopy — same approach taskctl/mailctl/
+// copyToClipboardCmd copies via OSC 52 (works over SSH/tmux) and also shells
+// out to pbcopy — Terminal.app ignores OSC 52 — same approach taskctl/mailctl/
 // notectl/calctl use for their own "y" copy shortcuts, no clipboard
 // library needed.
 func copyToClipboardCmd(text string) tea.Cmd {
-	return func() tea.Msg {
+	return tea.Batch(tea.SetClipboard(text), func() tea.Msg {
 		cmd := exec.Command("pbcopy")
 		cmd.Stdin = strings.NewReader(text)
 		_ = cmd.Run()
 		return nil
-	}
+	})
 }

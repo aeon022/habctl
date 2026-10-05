@@ -19,6 +19,10 @@ import (
 
 // ── bubbletea interface ───────────────────────────────────────────────────────
 
+// focusReloadAfter is how stale the list must be before a window-focus event
+// reloads it.
+const focusReloadAfter = 5 * time.Second
+
 func (m model) Init() tea.Cmd {
 	days := 30
 	if m.weekView {
@@ -82,7 +86,24 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case tea.FocusMsg:
+		// Window regained focus: data may have changed elsewhere (CLI, MCP,
+		// another terminal). Reload — but only while just browsing the list,
+		// so no input/confirm/palette state is ever disturbed, and not on
+		// every focus flicker.
+		if m.state != viewList || m.batchMode || m.confirmPrompt != "" || m.reloading ||
+			time.Since(m.lastLoad) < focusReloadAfter {
+			return m, nil
+		}
+		m.reloading = true
+		days := 30
+		if m.weekView {
+			days = 7
+		}
+		return m, loadHabits(m.s, days)
+
 	case habitsLoadedMsg:
+		m.lastLoad, m.reloading = time.Now(), false
 		stats := []models.HabitStats(msg)
 		sort.SliceStable(stats, func(i, j int) bool {
 			gi, gj := stats[i].Habit.GroupID, stats[j].Habit.GroupID

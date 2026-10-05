@@ -210,6 +210,11 @@ type model struct {
 	allHabits []models.HabitStats
 	filterQ   string
 
+	// focus reload: lastLoad is when habitsLoadedMsg last arrived; reloading
+	// is true while a focus-triggered reload is in flight.
+	lastLoad  time.Time
+	reloading bool
+
 	// ":" command palette
 	cmdCursor int // index into the filtered command matches
 
