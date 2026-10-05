@@ -407,6 +407,7 @@ func Run(s *store.Store) error {
 	ti := textinput.New()
 	ti.Placeholder = "Habit name…"
 	ti.CharLimit = 80
+	ti.SetWidth(40) // v2: width 0 clips the placeholder to 1 char
 
 	cfg, _ := config.Load()
 
@@ -764,7 +765,7 @@ func (m model) handleList(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if m.cursor < len(m.habits)-1 {
 				m.cursor++
 			}
-		case " ":
+		case "space":
 			if len(m.habits) == 0 {
 				break
 			}
@@ -841,7 +842,7 @@ func (m model) handleList(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.cursor--
 		}
 
-	case " ":
+	case "space":
 		if len(m.habits) == 0 {
 			break
 		}
@@ -1425,7 +1426,7 @@ func (m model) handleHabitDetail(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case "esc", "q", "enter":
 		m.state = viewList
-	case " ":
+	case "space":
 		if len(m.habits) == 0 {
 			break
 		}
@@ -2074,7 +2075,7 @@ func (m model) handleSuggest(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.suggestCursor--
 		}
 
-	case " ":
+	case "space":
 		if m.suggestMode == "chain" {
 			if m.suggestCursor < len(m.chainSuggestItems) {
 				m.chainSuggestItems[m.suggestCursor].selected = !m.chainSuggestItems[m.suggestCursor].selected
