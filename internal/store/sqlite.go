@@ -274,7 +274,7 @@ func (s *Store) ListArchivedHabits() ([]models.Habit, error) {
 	rows, err := s.db.Query(`
 		SELECT id, name, description, icon, COALESCE(group_id,0),
 		       freq_target, skip_allowed, created_at
-		FROM habits WHERE archived = 1 ORDER BY created_at DESC
+		FROM habits WHERE archived = 1 ORDER BY id DESC
 	`)
 	if err != nil {
 		return nil, err
@@ -322,7 +322,7 @@ func (s *Store) ListHabits() ([]models.Habit, error) {
 		FROM habits h
 		LEFT JOIN groups g ON h.group_id = g.id
 		WHERE h.archived = 0
-		ORDER BY COALESCE(g.sort_order, 999999), h.created_at ASC
+		ORDER BY COALESCE(g.sort_order, 999999), h.id ASC
 	`)
 	if err != nil {
 		return nil, err

@@ -450,3 +450,34 @@ func TestWeeklyNoCheckinsIsZero(t *testing.T) {
 		t.Errorf("streak=%d longest=%d, want 0/0", st.Streak, st.LongestStreak)
 	}
 }
+
+// created_at is RFC3339Nano, which trims trailing zeros: as TEXT, ".1Z" sorts
+// AFTER ".12Z" although 0.1s is earlier. Ordering by created_at therefore
+// scrambled habits created close together (flaky on CI); list order must be
+// insertion order (id).
+func TestListHabitsInsertionOrderDespiteTimestampFormat(t *testing.T) {
+	s := testStore(t)
+	for _, n := range []string{"A", "B", "C"} {
+		if _, err := s.AddHabit(n, "", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, ts := range map[string]string{
+		"A": "2026-01-01T00:00:00.1Z",
+		"B": "2026-01-01T00:00:00.12Z",
+		"C": "2026-01-01T00:00:00.123Z",
+	} {
+		if _, err := s.db.Exec(`UPDATE habits SET created_at = ? WHERE name = ?`, ts, name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	hs, err := s.ListHabits()
+	if err != nil || len(hs) != 3 {
+		t.Fatalf("ListHabits: %v len=%d", err, len(hs))
+	}
+	for i, want := range []string{"A", "B", "C"} {
+		if hs[i].Name != want {
+			t.Errorf("order[%d] = %s, want %s", i, hs[i].Name, want)
+		}
+	}
+}
