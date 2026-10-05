@@ -532,6 +532,9 @@ func (s *Store) computeStats(h models.Habit, days int) (models.HabitStats, error
 				streak++
 				consecutiveMisses = 0
 			} else {
+				if i == 0 {
+					continue // today isn't over yet — an unchecked today must not end the streak
+				}
 				consecutiveMisses++
 				if consecutiveMisses > h.SkipAllowed {
 					break
@@ -627,7 +630,7 @@ type CalendarData struct {
 // GetCalendarData returns per-day completion counts for the past `weeks` weeks.
 func (s *Store) GetCalendarData(weeks int) (CalendarData, error) {
 	var total int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM habits`).Scan(&total); err != nil {
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM habits WHERE archived = 0`).Scan(&total); err != nil {
 		return CalendarData{}, err
 	}
 	if total == 0 {
