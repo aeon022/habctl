@@ -60,7 +60,7 @@ type HabitStats struct {
 	LongestStreak int
 	TotalDays     int
 	LastCheckIn   *time.Time
-	CheckedToday  bool   // for weekly habits: true when week's target is met
+	CheckedToday  bool // for weekly habits: true when week's target is met
 	Last7Days     [7]bool
 	ChainTo       string // name of chained follow-up habit (empty if none)
 	TodayNote     string // note for today's check-in (empty if none)
