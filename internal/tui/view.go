@@ -15,7 +15,9 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/aeon022/habctl/internal/ai"
 	"github.com/aeon022/habctl/internal/models"
+	"github.com/aeon022/missionctl-core/emptystate"
 	"github.com/aeon022/missionctl-core/overlay"
+	"github.com/aeon022/missionctl-core/statusbar"
 )
 
 // ── view ──────────────────────────────────────────────────────────────────────
@@ -35,7 +37,7 @@ func (m model) viewContent() string {
 	case viewHelp:
 		// "?" is only reachable from the main list (handleList), so the list
 		// is always the correct background to keep visible behind the popup.
-		return overlay.Center(m.renderList(), m.renderHelpPopup(), m.width, m.height, 1)
+		return overlay.CenterDim(m.renderList(), m.renderHelpPopup(), m.width, m.height, 1)
 	case viewAddInput:
 		return m.renderAddInput()
 	case viewAddDesc:
@@ -265,9 +267,9 @@ func (m model) renderList() string {
 
 	if total == 0 {
 		if m.filterQ != "" || m.state == viewFilterInput {
-			b.WriteString(styleMuted.Render("No habits match the filter.") + "\n")
+			b.WriteString(emptystate.Render(0, 0, "", "No habits match the filter", "esc clears the filter") + "\n")
 		} else {
-			b.WriteString(styleMuted.Render("No habits yet — press n to add one.") + "\n")
+			b.WriteString(emptystate.Render(0, 0, "", "No habits yet", "press n to add one") + "\n")
 		}
 	} else {
 		const cbW = 4   // "[✓] "
@@ -465,20 +467,14 @@ func (m model) renderList() string {
 		}
 	}
 
-	fk := func(key, label string) string {
-		return styleLime.Render(key) + styleMuted.Render(":"+label)
-	}
-	footer := fk("space", "✓/✗") + styleMuted.Render("  ") +
-		fk("↵", "open") + styleMuted.Render("  ") +
-		fk("n", "new") + styleMuted.Render("  ") +
-		fk("e", "edit") + styleMuted.Render("  ") +
-		fk("d", "delete") + styleMuted.Render("  ") +
-		fk("y", "copy") + styleMuted.Render("  ") +
-		fk("s", "AI") + styleMuted.Render("  ") +
-		fk("r", "review") + styleMuted.Render("  ") +
-		styleLime.Render(":") + styleMuted.Render("cmd") + styleMuted.Render("  ") + // the key IS ":" — fk() would double it into "::cmd"
-		fk("?", "help") + styleMuted.Render("  ") +
-		fk("q", "quit")
+	// Priority order: statusbar drops the LAST hints first on a narrow
+	// terminal, so help/quit sit early.
+	footer := statusbar.Hints(m.innerWidth(),
+		[2]string{"space", "✓/✗"}, [2]string{"↵", "open"}, [2]string{"n", "new"},
+		[2]string{"?", "help"}, [2]string{"q", "quit"}, [2]string{"e", "edit"},
+		[2]string{"d", "delete"}, [2]string{"y", "copy"}, [2]string{"s", "AI"},
+		[2]string{"r", "review"}, [2]string{":", "cmd"},
+	)
 	b.WriteString(footer)
 	return m.dynamicPanel(b.String(), borderColor)
 }
@@ -699,7 +695,7 @@ func (m model) renderGroupMgr() string {
 	b.WriteString(sectionHeader("Groups") + "\n\n")
 
 	if len(m.groups) == 0 {
-		b.WriteString(styleMuted.Render("No groups yet — press a to create one.") + "\n\n")
+		b.WriteString(emptystate.Render(0, 0, "", "No groups yet", "press a to create one") + "\n\n")
 	} else {
 		for i, g := range m.groups {
 			cursor := "  "
@@ -1148,7 +1144,7 @@ func (m model) renderSuggest() string {
 		}
 		b.WriteString(styleMuted.Render("space ✓ · enter add · a all · j/k · esc back"))
 	} else if !m.suggestDone {
-		b.WriteString(styleMuted.Render(loadingMsg) + "\n\n")
+		b.WriteString(emptystate.Loading(0, 0, "", loadingMsg) + "\n\n")
 		b.WriteString(styleLime.Render(blinkCursor))
 	} else if m.suggestBlocked {
 		b.WriteString(styleWarn.Render(m.suggestText) + "\n")
@@ -1770,7 +1766,7 @@ func (m model) renderChainMgr() string {
 	b.WriteString(styleMuted.Render("After habit A, do habit B next.") + "\n\n")
 
 	if len(m.chains) == 0 {
-		b.WriteString(styleMuted.Render("No chains yet — press a to add, s for AI suggestions.") + "\n")
+		b.WriteString(emptystate.Render(0, 0, "", "No chains yet", "press a to add, s for AI suggestions") + "\n")
 	} else {
 		for i, ch := range m.chains {
 			cursor := "  "
