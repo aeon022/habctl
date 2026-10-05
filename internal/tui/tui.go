@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"github.com/aeon022/missionctl-core/humanize"
 	"os"
 	"os/exec"
 	"sort"
@@ -2624,7 +2625,7 @@ func (m model) renderList() string {
 						groupNameW = 1
 					}
 					glabel := lipgloss.NewStyle().Width(groupNameW).Render(
-						styleGroup.Render(truncate(label, groupNameW-1)),
+						styleGroup.Render(humanize.Truncate(label, groupNameW-1)),
 					)
 					b.WriteString("\n" + glabel + " " + counter + "\n")
 				} else if i > 0 {
@@ -2702,9 +2703,9 @@ func (m model) renderList() string {
 			matchIdx := fuzzyMatchIndexes(m.filterQ, h.Habit.Name)
 			var rawName string
 			if h.Habit.Icon != "" {
-				rawName = ns.Render(h.Habit.Icon+" ") + highlightMatches(truncate(h.Habit.Name, nameW-4), matchIdx, ns)
+				rawName = ns.Render(h.Habit.Icon+" ") + highlightMatches(humanize.Truncate(h.Habit.Name, nameW-4), matchIdx, ns)
 			} else {
-				rawName = highlightMatches(truncate(h.Habit.Name, nameW-1), matchIdx, ns)
+				rawName = highlightMatches(humanize.Truncate(h.Habit.Name, nameW-1), matchIdx, ns)
 			}
 			nameCol := lipgloss.NewStyle().Width(nameW).Render(rawName)
 
@@ -2741,10 +2742,10 @@ func (m model) renderList() string {
 				const descMaxW = 58
 				const subIndent = "      "
 				if h.Habit.Description != "" {
-					b.WriteString(subIndent + styleMuted.Render(truncate(h.Habit.Description, descMaxW)) + "\n")
+					b.WriteString(subIndent + styleMuted.Render(humanize.Truncate(h.Habit.Description, descMaxW)) + "\n")
 				}
 				if h.TodayNote != "" {
-					b.WriteString(subIndent + styleMuted.Render("📝 "+truncate(h.TodayNote, descMaxW-3)) + "\n")
+					b.WriteString(subIndent + styleMuted.Render("📝 "+humanize.Truncate(h.TodayNote, descMaxW-3)) + "\n")
 				}
 				if h.ChainTo != "" {
 					b.WriteString(subIndent + styleMuted.Render("→ "+h.ChainTo) + "\n")
@@ -3145,14 +3146,14 @@ func (m model) renderStats() string {
 		b.WriteString(fmt.Sprintf("  %s %s  %s\n",
 			lbl.Render("🔥 current:"),
 			numV.Render(fmt.Sprintf("%d days", bestStreak)),
-			lbl.Render("— "+truncate(bestName, 24)),
+			lbl.Render("— "+humanize.Truncate(bestName, 24)),
 		))
 	}
 	if bestLongest > bestStreak {
 		b.WriteString(fmt.Sprintf("  %s %s  %s\n",
 			lbl.Render("   longest:"),
 			numV.Render(fmt.Sprintf("%d days", bestLongest)),
-			lbl.Render("— "+truncate(bestLongestName, 24)),
+			lbl.Render("— "+humanize.Truncate(bestLongestName, 24)),
 		))
 	}
 
@@ -3267,8 +3268,8 @@ func (m model) renderStats() string {
 			b.WriteString(fmt.Sprintf("  %s %s %s %s\n",
 				numV.Render(fmt.Sprintf("%.0f%%", p.jaccard*100)),
 				lbl.Render("of the time"),
-				lbl.Render(truncate(p.nameA, 20)+" +"),
-				lbl.Render(truncate(p.nameB, 20)),
+				lbl.Render(humanize.Truncate(p.nameA, 20)+" +"),
+				lbl.Render(humanize.Truncate(p.nameB, 20)),
 			))
 		}
 	}
@@ -3865,7 +3866,7 @@ func (m model) renderHabitDetail() string {
 			b.WriteString(ind + styleMuted.Render("Past notes") + "\n")
 			for _, n := range pastNotes {
 				b.WriteString(ind + styleMuted.Render(n.Date+"  ") +
-					styleFg.Render(truncate(n.Note, maxW-len(ind)-13)) + "\n")
+					styleFg.Render(humanize.Truncate(n.Note, maxW-len(ind)-13)) + "\n")
 			}
 		}
 	}
@@ -4021,7 +4022,7 @@ func (m model) renderArchive() string {
 			}
 			b.WriteString(cursor + ns.Render(name) + "\n")
 			if h.Description != "" {
-				b.WriteString("      " + styleMuted.Render(truncate(h.Description, 52)) + "\n")
+				b.WriteString("      " + styleMuted.Render(humanize.Truncate(h.Description, 52)) + "\n")
 			}
 		}
 		b.WriteString("\n")
@@ -4326,14 +4327,6 @@ func wordWrap(text string, width int) string {
 	return lipgloss.NewStyle().Width(width).Render(text)
 }
 
-func truncate(s string, n int) string {
-	runes := []rune(s)
-	if len(runes) <= n {
-		return s
-	}
-	return string(runes[:n-1]) + "…"
-}
-
 func truncateDay(t time.Time) time.Time {
 	y, mo, d := t.Date()
 	return time.Date(y, mo, d, 0, 0, 0, 0, t.Location())
@@ -4435,4 +4428,3 @@ func startOAuth(clientID, clientSecret string) tea.Cmd {
 		return oauthSuccessMsg{rt}
 	}
 }
-
