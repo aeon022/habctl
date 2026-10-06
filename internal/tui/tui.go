@@ -213,6 +213,7 @@ type model struct {
 	// focus reload: lastLoad is when habitsLoadedMsg last arrived; reloading
 	// is true while a focus-triggered reload is in flight.
 	lastLoad  time.Time
+	heat      map[int64]map[string]bool // check-in dates per habit id (12 weeks), for the detail panel heatmap
 	reloading bool
 
 	// ":" command palette

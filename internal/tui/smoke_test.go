@@ -63,12 +63,12 @@ func TestSmokeEmptyData(t *testing.T) {
 }
 
 func TestListFooterNeverWraps(t *testing.T) {
-	for _, w := range []int{60, 80, 100} {
+	for _, w := range []int{60, 80, 100, 140} {
 		m, _ := flow(t, "Run")
 		m.width, m.height = w, 30
 		foot := lastNonEmptyLine(tuitest.Text(m))
-		if lipgloss.Width(foot) > m.innerWidth() {
-			t.Errorf("width %d: footer is %d cells wide, inner width is %d: %q", w, lipgloss.Width(foot), m.innerWidth(), foot)
+		if lipgloss.Width(foot) > w {
+			t.Errorf("width %d: footer is %d cells wide: %q", w, lipgloss.Width(foot), foot)
 		}
 	}
 }

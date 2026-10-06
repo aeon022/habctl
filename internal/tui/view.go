@@ -18,6 +18,7 @@ import (
 	"github.com/aeon022/missionctl-core/emptystate"
 	"github.com/aeon022/missionctl-core/overlay"
 	"github.com/aeon022/missionctl-core/statusbar"
+	"github.com/aeon022/missionctl-core/ui"
 )
 
 // ── view ──────────────────────────────────────────────────────────────────────
@@ -140,25 +141,41 @@ func (m model) dynamicPanel(s string, bc color.Color) string {
 
 // ── renderList ────────────────────────────────────────────────────────────────
 
-func (m model) renderList() string {
-	var b strings.Builder
-	today := truncateDay(time.Now())
+const wideMin = 120 // at this width the list gets a detail panel next to it
 
-	innerW := m.innerWidth()
-
-	// active "/" filter: input line while typing, chip afterwards
-	filterLine := ""
-	if m.state == viewFilterInput {
-		filterLine = "  / " + m.input.View() + "\n"
-	} else if m.filterQ != "" {
-		filterLine = "  " + styleMuted.Render("filter: /"+m.filterQ+"  (esc clears)") + "\n"
+func (m model) termWidth() int {
+	if m.width <= 0 {
+		return 80
 	}
+	return m.width
+}
 
-	// active ":" command palette: input line + up to 6 live-filtered matches
-	cmdLine := ""
+func (m model) isWide() bool { return m.termWidth() >= wideMin }
+
+// leftPanelW is the list panel's outer width in the wide layout.
+func (m model) leftPanelW() int { return m.termWidth() * 58 / 100 }
+
+// listRowW is the width ui.Row pads each habit row to: inside the left panel
+// (border 2 + 1 pad) when wide, else the terminal width (capped).
+func (m model) listRowW() int {
+	if m.isWide() {
+		return m.leftPanelW() - 4 // border 2 + 1 pad + 1 breathing room before the right border
+	}
+	return min(max(m.termWidth(), 40), 128)
+}
+
+// listPreamble is the filter / command-palette / batch lines shown between
+// the header and the list; renderList and rowHitTest share it so they can't
+// drift apart.
+func (m model) listPreamble() []string {
+	var lines []string
+	if m.state == viewFilterInput {
+		lines = append(lines, "  / "+m.input.View())
+	} else if m.filterQ != "" {
+		lines = append(lines, "  "+styleMuted.Render("filter: /"+m.filterQ+"  (esc clears)"))
+	}
 	if m.state == viewCommand {
-		var cb strings.Builder
-		cb.WriteString("  : " + m.input.View() + "\n")
+		lines = append(lines, "  : "+m.input.View())
 		matches := matchPaletteCommands(m.input.Value())
 		if len(matches) > 6 {
 			matches = matches[:6]
@@ -166,110 +183,104 @@ func (m model) renderList() string {
 		for i, c := range matches {
 			row := fmt.Sprintf("%-11s %s", c.name, c.desc)
 			if i == m.cmdCursor {
-				cb.WriteString("    " + styleOkBold.Render("▶ "+row) + "\n")
+				lines = append(lines, "    "+styleOkBold.Render("▶ "+row))
 			} else {
-				cb.WriteString("      " + styleMuted.Render(row) + "\n")
+				lines = append(lines, "      "+styleMuted.Render(row))
 			}
 		}
 		if len(matches) == 0 {
-			cb.WriteString("    " + styleMuted.Render("no matching command") + "\n")
+			lines = append(lines, "    "+styleMuted.Render("no matching command"))
 		}
-		cmdLine = cb.String()
 	}
+	if m.batchMode {
+		lines = append(lines, "  "+styleLime.Render(fmt.Sprintf("select: %d", len(m.batchSelected)))+
+			styleMuted.Render("  space toggle  A all  enter archive  esc cancel"))
+	}
+	return lines
+}
 
-	// ── header ────────────────────────────────────────────────────────────────
+// footerHints are the key hints valid right now, most important first (the
+// statusbar drops the LAST ones on a narrow terminal, so ? and q sit early).
+func (m model) footerHints() [][2]string {
+	switch {
+	case m.batchMode:
+		return [][2]string{{"space", "toggle"}, {"A", "all"}, {"↵", "archive"}, {"esc", "cancel"}}
+	case m.state == viewFilterInput:
+		return [][2]string{{"↵", "keep"}, {"esc", "clear"}}
+	case m.state == viewCommand:
+		return [][2]string{{"↵", "run"}, {"↑↓", "pick"}, {"esc", "close"}}
+	}
+	h := [][2]string{{"space", "✓/✗"}, {"↵", "open"}, {"n", "new"}, {"?", "help"}, {"q", "quit"},
+		{"e", "edit"}, {"d", "delete"}, {"y", "copy"}, {"s", "AI"}, {"r", "review"}, {":", "cmd"}}
+	if m.filterQ != "" {
+		h = append([][2]string{{"esc", "clear filter"}}, h...)
+	}
+	return h
+}
 
-	done, total := 0, len(m.habits)
+// footerBlock is the optional message line plus the one-line status bar
+// (hints left, "cursor/total" right).
+func (m model) footerBlock() string {
+	w := m.termWidth()
+	pos := ""
+	if len(m.habits) > 0 {
+		pos = styleMuted.Render(fmt.Sprintf("%d/%d", m.cursor+1, len(m.habits)))
+	}
+	bar := statusbar.Line(w, statusbar.Hints(max(w-8, 10), m.footerHints()...), pos)
+	if m.message == "" {
+		return bar
+	}
+	msgStyle := styleOk
+	if m.isErr {
+		msgStyle = styleDanger
+	}
+	return "  " + msgStyle.Render(humanize.Truncate(m.message, max(w-4, 10))) + "\n" + bar
+}
+
+func (m model) footerLineCount() int {
+	if m.message != "" {
+		return 2
+	}
+	return 1
+}
+
+// listHeader is the title bar + rule, always 2 lines.
+func (m model) listHeader() string {
+	w := m.termWidth()
+	done, total, best := 0, len(m.habits), 0
 	for _, h := range m.habits {
 		if h.CheckedToday {
 			done++
 		}
+		best = max(best, h.Streak)
 	}
-	bestStreak := 0
-	for _, h := range m.habits {
-		if h.Streak > bestStreak {
-			bestStreak = h.Streak
-		}
-	}
-
-	// precompute border color
-	anyAtRisk := false
-	for _, h := range m.habits {
-		if h.Habit.FreqTarget > 0 {
-			wd := int(time.Now().Weekday())
-			daysLeft := 1
-			if wd != 0 {
-				daysLeft = 8 - wd
-			}
-			needed := h.Habit.FreqTarget - h.WeeklyDone
-			if needed > 0 && daysLeft <= needed {
-				anyAtRisk = true
-				break
-			}
-		} else {
-			if h.Streak > 0 && !h.CheckedToday {
-				anyAtRisk = true
-				break
-			}
-		}
-	}
-	var borderColor color.Color
-	switch {
-	case total > 0 && done == total:
-		borderColor = ColorOk
-	case anyAtRisk:
-		borderColor = colorWarn
-	default:
-		borderColor = colorBorder
-	}
-
-	appName := sectionHeader("Habits")
-	dateStr := styleMuted.Render(today.Format("Mon, 02 Jan 2006"))
-	pad := innerW - lipgloss.Width(appName) - lipgloss.Width(dateStr)
-	if pad < 1 {
-		pad = 1
-	}
-	b.WriteString(appName + strings.Repeat(" ", pad) + dateStr + "\n")
-
-	var statsLine strings.Builder
-	if bestStreak > 0 {
-		statsLine.WriteString(styleOkBold.Render(fmt.Sprintf("🔥 %d", bestStreak)) +
-			styleMuted.Render(" days  ·  "))
-	}
+	var mid string
 	if total > 0 {
-		var ps lipgloss.Style
-		switch {
-		case done == total:
-			ps = styleOkBold
-		case done > 0:
-			ps = styleOk
-		default:
-			ps = styleMuted
+		mid = ui.Bar(6, float64(done)/float64(total), false) + styleMuted.Render(fmt.Sprintf(" %d/%d today · %d habits", done, total, total))
+		if best > 0 {
+			mid = styleOkBold.Render(fmt.Sprintf("🔥 %d", best)) + styleMuted.Render(" · ") + mid
 		}
-		bar := styleMuted.Render("[") + tinyBar(done, total, 6) + styleMuted.Render("]")
-		statsLine.WriteString(bar + " " + ps.Render(fmt.Sprintf("%d/%d", done, total)) +
-			styleMuted.Render(fmt.Sprintf("  ·  %d habits", total)))
 	}
-	b.WriteString(statsLine.String() + "\n")
-	if filterLine != "" {
-		b.WriteString(filterLine)
-	}
-	if cmdLine != "" {
-		b.WriteString(cmdLine)
-	}
-	if m.batchMode {
-		b.WriteString("  " + styleLime.Render(fmt.Sprintf("select: %d", len(m.batchSelected))) +
-			styleMuted.Render("  space toggle  A all  enter archive  esc cancel") + "\n")
-	}
-	b.WriteString("\n")
+	left := "  " + styleLime.Bold(true).Render("habctl")
+	right := styleMuted.Render(time.Now().Format("Mon 02 Jan")) + "  "
+	return ui.Header(w, left, mid, right) + "\n" + ui.Divider(w, "")
+}
 
-	// ── habit list ────────────────────────────────────────────────────────────
-
+// listLines renders the habit rows (with group headers, descriptions and
+// separators) as lines, each at most rowW cells.
+func (m model) listLines(rowW int) []string {
+	var b strings.Builder
+	total := len(m.habits)
+	innerW := rowW - 2
 	if total == 0 {
+		var es string
 		if m.filterQ != "" || m.state == viewFilterInput {
-			b.WriteString(emptystate.Render(0, 0, "", "No habits match the filter", "esc clears the filter") + "\n")
+			es = emptystate.Render(0, 0, "", "No habits match the filter", "esc clears the filter")
 		} else {
-			b.WriteString(emptystate.Render(0, 0, "", "No habits yet", "press n to add one") + "\n")
+			es = emptystate.Render(0, 0, "", "No habits yet", "press n to add one")
+		}
+		for _, l := range strings.Split(es, "\n") {
+			b.WriteString("  " + l + "\n")
 		}
 	} else {
 		const cbW = 4   // "[✓] "
@@ -309,7 +320,7 @@ func (m model) renderList() string {
 							}
 						}
 					}
-					minibar := styleMuted.Render("[") + tinyBar(gDone, gTotal, 4) + styleMuted.Render("]")
+					minibar := ui.Bar(4, float64(gDone)/float64(max(gTotal, 1)), false)
 					counter := minibar + styleMuted.Render(fmt.Sprintf(" %d/%d", gDone, gTotal))
 					ctrW := lipgloss.Width(counter)
 					groupNameW := innerW - ctrW - 1
@@ -319,7 +330,7 @@ func (m model) renderList() string {
 					glabel := lipgloss.NewStyle().Width(groupNameW).Render(
 						styleGroup.Render(humanize.Truncate(label, groupNameW-1)),
 					)
-					b.WriteString("\n" + glabel + " " + counter + "\n")
+					b.WriteString("\n  " + glabel + " " + counter + "\n")
 				} else if i > 0 {
 					b.WriteString("\n")
 				}
@@ -428,7 +439,7 @@ func (m model) renderList() string {
 			}
 			skCol := lipgloss.NewStyle().Width(skW).Align(lipgloss.Right).Render(skContent)
 
-			b.WriteString(cb + nameCol + dotsCol + skCol + "\n")
+			b.WriteString(ui.Row(rowW, selected, cb+nameCol+dotsCol+skCol) + "\n")
 
 			if !m.compact {
 				const descMaxW = 58
@@ -446,57 +457,132 @@ func (m model) renderList() string {
 			b.WriteString("\n")
 		}
 	}
+	return strings.Split(strings.TrimRight(b.String(), "\n"), "\n")
+}
 
-	b.WriteString("\n")
-	if m.message != "" {
-		msgStyle := styleOk
-		if m.isErr {
-			msgStyle = styleDanger
-		}
-		b.WriteString(msgStyle.Render(m.message) + "\n\n")
+// detailContent is the right-hand panel in the wide layout: the selected
+// habit's numbers and a 12-week heatmap, w cells wide.
+func (m model) detailContent(w int) string {
+	if len(m.habits) == 0 || m.cursor >= len(m.habits) {
+		return styleMuted.Render("Select a habit")
 	}
+	h := m.habits[m.cursor]
+	var b strings.Builder
+	name := h.Habit.Name
+	if h.Habit.Icon != "" {
+		name = h.Habit.Icon + " " + name
+	}
+	b.WriteString(styleFg.Bold(true).Render(humanize.Truncate(name, w)) + "\n")
+	if h.Habit.Description != "" {
+		b.WriteString(styleMuted.Render(humanize.Truncate(h.Habit.Description, w)) + "\n")
+	}
+	b.WriteString("\n")
+	unit := "days"
+	if h.Habit.FreqTarget > 0 {
+		unit = "weeks"
+	}
+	b.WriteString(styleMuted.Render("Streak   ") + styleOkBold.Render(fmt.Sprintf("🔥 %d %s", h.Streak, unit)) +
+		styleMuted.Render(fmt.Sprintf("   longest %d", h.LongestStreak)) + "\n")
+	if h.Habit.FreqTarget > 0 {
+		ratio := float64(h.WeeklyDone) / float64(h.Habit.FreqTarget)
+		b.WriteString(styleMuted.Render("Week     ") + ui.Bar(12, ratio, false) + fmt.Sprintf(" %d/%d", h.WeeklyDone, h.Habit.FreqTarget) + "\n")
+	} else if h.CheckedToday {
+		b.WriteString(styleMuted.Render("Today    ") + styleOkBold.Render("✓ done") + "\n")
+	} else {
+		b.WriteString(styleMuted.Render("Today    ") + styleWarn.Render("not yet") + "\n")
+	}
+	last := "never"
+	if h.LastCheckIn != nil {
+		last = ui.RelTime(*h.LastCheckIn, time.Now())
+	}
+	b.WriteString(styleMuted.Render("Last     ") + last + styleMuted.Render(fmt.Sprintf("   total %d days", h.TotalDays)) + "\n\n")
+	b.WriteString(styleMuted.Render("Last 12 weeks") + "\n")
+	b.WriteString(m.heatmap(h.Habit.ID))
+	return b.String()
+}
 
-	// Pin the footer to the bottom of the panel instead of letting it
-	// glue itself right under a short habit list — pad the body out to
-	// the panel's full line budget first (panelStyle overhead: border
-	// 1+1, padding(1,2) → 4 rows), same pattern taskctl/notectl use.
-	if m.height > 0 {
-		budget := m.height - 4
-		for lines := strings.Count(b.String(), "\n") + 1; lines < budget; lines++ {
+// heatmap draws 12 week-columns × 7 weekday-rows (Mon first) of ui.Heat cells.
+func (m model) heatmap(id int64) string {
+	const weeks = 12
+	today := truncateDay(time.Now())
+	monday := today.AddDate(0, 0, -((int(today.Weekday()) + 6) % 7))
+	start := monday.AddDate(0, 0, -(weeks-1)*7)
+	var b strings.Builder
+	for r, letter := range []string{"M", "T", "W", "T", "F", "S", "S"} {
+		b.WriteString(styleMuted.Render(letter) + " ")
+		for c := 0; c < weeks; c++ {
+			d := start.AddDate(0, 0, c*7+r)
+			switch {
+			case d.After(today):
+				b.WriteString(" ")
+			case m.heat[id][d.Format("2006-01-02")]:
+				b.WriteString(ui.Heat(1, 1))
+			default:
+				b.WriteString(ui.Heat(0, 1))
+			}
+			if c < weeks-1 {
+				b.WriteString(" ")
+			}
+		}
+		if r < 6 {
 			b.WriteString("\n")
 		}
 	}
-
-	// Priority order: statusbar drops the LAST hints first on a narrow
-	// terminal, so help/quit sit early.
-	footer := statusbar.Hints(m.innerWidth(),
-		[2]string{"space", "✓/✗"}, [2]string{"↵", "open"}, [2]string{"n", "new"},
-		[2]string{"?", "help"}, [2]string{"q", "quit"}, [2]string{"e", "edit"},
-		[2]string{"d", "delete"}, [2]string{"y", "copy"}, [2]string{"s", "AI"},
-		[2]string{"r", "review"}, [2]string{":", "cmd"},
-	)
-	b.WriteString(footer)
-	return m.dynamicPanel(b.String(), borderColor)
+	return b.String()
 }
 
-// habitWindowHeight is the approximate row-count budget for the scroll
-// window (visibleHabitsWithStart) — an approximation like budgetctl/
-// calctl/taskctl already use elsewhere, since rows here are variable
-// height (1-4 lines) and an exact line budget isn't worth the
-// complexity: panel border+padding top(2) + header+stats(2) + optional
-// filter chip(1) + blank(1) reserved up front, then a generous fixed
-// footer reservation (blank + footer text + optional message + panel
-// border+padding bottom) so the last row+description never gets clipped.
+func (m model) renderList() string {
+	w := m.termWidth()
+	pre := m.listPreamble()
+	body := strings.Join(pre, "\n")
+	rowW := m.listRowW()
+	list := strings.Join(m.listLines(rowW), "\n")
+	if m.isWide() {
+		room := max(m.height-2-len(pre)-m.footerLineCount(), 5)
+		lw := m.leftPanelW()
+		left := ui.Panel(lw, room, "Habits", list, true)
+		right := ui.Panel(w-lw-1, room, "Detail", m.detailContent(w-lw-1-3), false)
+		panels := lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
+		if body != "" {
+			body += "\n"
+		}
+		body += panels
+	} else {
+		if body != "" {
+			body += "\n"
+		}
+		body += list
+	}
+	return ui.Frame(m.height, m.listHeader(), body, m.footerBlock())
+}
+
+// habitWindowHeight is how many habit rows fit the body: the line budget
+// divided by an estimate of lines per habit (row + separator, plus one when
+// descriptions/notes are shown), minus group-header lines.
+// ponytail: an estimate, not an exact line count — ui.Frame clips overflow;
+// exact variable-height scrolling if clipped cursors ever show up.
 func (m model) habitWindowHeight() int {
-	preamble := 4
-	if m.filterQ != "" {
-		preamble++
+	room := m.height - 2 - len(m.listPreamble()) - m.footerLineCount()
+	if m.isWide() {
+		room -= 2 // panel borders
 	}
-	h := m.height - preamble - 6
-	if h < 1 {
-		h = 1
+	perRow := 2
+	if !m.compact {
+		for _, h := range m.habits {
+			if h.Habit.Description != "" || h.TodayNote != "" || h.ChainTo != "" {
+				perRow = 3
+				break
+			}
+		}
 	}
-	return h
+	groups := map[int64]bool{}
+	for _, h := range m.habits {
+		if h.Habit.GroupID != 0 {
+			groups[h.Habit.GroupID] = true
+		}
+	}
+	room -= 2 * len(groups)
+	return max(room/perRow, 1)
 }
 
 // visibleHabitsWithStart returns the scroll-windowed slice of m.habits
@@ -522,23 +608,17 @@ func (m model) visibleHabitsWithStart(height int) ([]models.HabitStats, int) {
 	return m.habits[start:end], start
 }
 
-// rowHitTest returns the m.habits index at screen row y, or -1 if the
-// click landed on a header, group label, description/note line, or
-// outside the list. Mirrors renderList's exact line-counting: panel
-// border+padding(2), header+stats(2), an optional filter chip(1), a
-// blank separator(1), then per habit — an optional group-change block
-// (2 lines for a new named group, 1 blank line when returning to
-// "no group" past the first row), the main row(1), 0-3 optional
-// description/note/chain lines when not compact, and a trailing blank(1).
-// Walks the same scroll window renderList computes (visibleHabitsWithStart,
-// seeded with the group of the row just above the window) so a click
-// lands on the habit it visually appears to be over once scrolled.
+// rowHitTest returns the m.habits index at screen row y, or -1 for a header,
+// group label, description line or anything outside the list. It walks the
+// same layout renderList draws: 2 header lines, the preamble, a panel border
+// line when wide, then per habit an optional group block (2 lines for a new
+// named group, 1 blank when returning to "no group"), the row, 0-3
+// description/note/chain lines and a trailing blank.
 func (m model) rowHitTest(y int) int {
-	row := 2 + 2 // panel border+padding, header+stats
-	if m.filterQ != "" {
-		row++
+	row := 2 + len(m.listPreamble())
+	if m.isWide() {
+		row++ // top border of the list panel
 	}
-	row++ // blank line before the list
 
 	visible, start := m.visibleHabitsWithStart(m.habitWindowHeight())
 	var lastGroupID int64 = -1
@@ -556,12 +636,10 @@ func (m model) rowHitTest(y int) int {
 				row++
 			}
 		}
-
 		if y == row {
 			return i
 		}
 		row++ // main row
-
 		if !m.compact {
 			if h.Habit.Description != "" {
 				row++

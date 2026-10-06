@@ -112,6 +112,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return !stats[i].CheckedToday && stats[j].CheckedToday
 		})
+		if m.s != nil { // detail-panel heatmap data; one small query per load
+			m.heat, _ = m.s.GetCheckinDatesByHabit(12)
+		}
 		m.allHabits = stats
 		m.habits = filterHabits(stats, m.filterQ)
 		if m.cursor >= len(m.habits) {
