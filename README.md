@@ -128,6 +128,24 @@ export HABCTL_DATA_DIR="$HOME/Library/Mobile Documents/com~apple~CloudDocs/habct
 
 Once set, habctl automatically switches its SQLite journal mode from WAL to rollback-journal — WAL splits the database across multiple files that a folder-sync client can't update atomically together, so this switch keeps the directory down to a single consistent file whenever habctl isn't actively writing. A same-machine lock also prevents two habctl processes from opening the database at once (run `habctl doctor` to see the current mode and path). This only protects against the same-machine and stale-snapshot failure modes, not two machines editing at the exact same instant; an undownloaded iCloud file is reported explicitly rather than as a bare error.
 
+## Recent changes (October 2026)
+
+- **Window focus.** When the terminal window regains focus, the list reloads from the local database — at most every 5 seconds, and only while you are just browsing (never while a form, editor, search, palette or confirmation is open, so nothing you are typing is lost). Terminals that don't report focus events simply never trigger it.
+
+- **Clipboard.** `y` copies the selected habit's name — now through OSC 52 as well as `pbcopy`, so it also works over SSH and inside tmux (your terminal must allow OSC 52; locally `pbcopy` still does the job).
+
+- **Footer and empty states.** The key-hint footer is the suite-wide one: it never wraps and drops the least important hints first on narrow terminals. Empty lists and loading screens show a short message with a hint what to press.
+
+- **Order.** Habits are listed in the order you created them (within their group). Before, habits created in quick succession could swap places.
+
+- **Longest weekly streak.** For weekly habits the longest streak is now computed from your whole history (consecutive Monday–Sunday weeks that reach the weekly target) instead of repeating the current streak.
+
+- **Streak while today is open.** A daily habit's streak is no longer reset to 0 every morning before you check in, so "streak at risk" (TUI border colour, detail view, the MCP tool `streak_at_risk`) works as intended; archived habits no longer keep the calendar from reaching 100 %.
+
+- The TUI now runs on Bubble Tea v2; key bindings are unchanged.
+
+---
+
 ## Part of missionctl
 
 habctl is one tool in the [missionctl](https://github.com/aeon022/missionctl) suite — local-first terminal tools that give AI hands: mailctl, calctl, taskctl, notectl, budgetctl, habctl, timectl, diaryctl, postctl.
