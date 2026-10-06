@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/aeon022/missionctl-core/activity"
 	"os"
 	"path/filepath"
 	"sync"
@@ -234,6 +235,7 @@ func (s *Store) AddHabit(name, description, icon string) (models.Habit, error) {
 		return models.Habit{}, fmt.Errorf("add habit: %w", err)
 	}
 	id, _ := res.LastInsertId()
+	activity.Log("habctl", "added", name)
 	return models.Habit{ID: id, Name: name, Description: description, Icon: icon, CreatedAt: now}, nil
 }
 
@@ -350,12 +352,21 @@ func (s *Store) CheckIn(name string, date time.Time) error {
 	if err := s.db.QueryRow(`SELECT id FROM habits WHERE name = ?`, name).Scan(&habitID); err != nil {
 		return fmt.Errorf("habit %q not found", name)
 	}
-	_, err := s.db.Exec(
+	res, err := s.db.Exec(
 		`INSERT OR IGNORE INTO checkins (habit_id, date, note, created_at) VALUES (?, ?, '', ?)`,
 		habitID, date.Format(dateLayout), time.Now().Format(tsLayout),
 	)
+	if err == nil {
+		// Only a new check-in for today counts: INSERT OR IGNORE on an existing
+		// row affects 0 rows, and backfilled days aren't "what I did today".
+		if n, _ := res.RowsAffected(); n > 0 && isToday(date) {
+			activity.Log("habctl", "checked", name)
+		}
+	}
 	return err
 }
+
+func isToday(d time.Time) bool { return d.Format(dateLayout) == time.Now().Format(dateLayout) }
 
 // DeleteCheckIn removes a check-in for the given habit and date (undo).
 func (s *Store) DeleteCheckIn(name string, date time.Time) error {
@@ -391,11 +402,16 @@ func (s *Store) CheckInWithNote(name string, date time.Time, note string) error 
 	}
 	dateStr := date.Format(dateLayout)
 	now := time.Now()
+	var existing int
+	_ = s.db.QueryRow(`SELECT COUNT(*) FROM checkins WHERE habit_id = ? AND date = ?`, habitID, dateStr).Scan(&existing)
 	_, err = s.db.Exec(
 		`INSERT INTO checkins (habit_id, date, note, created_at) VALUES (?, ?, ?, ?)
 		 ON CONFLICT(habit_id, date) DO UPDATE SET note = excluded.note`,
 		habitID, dateStr, note, now.Format(tsLayout),
 	)
+	if err == nil && existing == 0 && isToday(date) { // editing a note on an existing check-in is not a new action
+		activity.Log("habctl", "checked", name)
+	}
 	return err
 }
 
