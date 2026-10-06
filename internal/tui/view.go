@@ -118,16 +118,20 @@ func (m model) innerWidth() int {
 	return w
 }
 
-// tinyBar renders a compact filled/empty progress bar of given width.
-func tinyBar(done, total, width int) string {
-	if total == 0 || width <= 0 {
-		return styleMuted.Render(strings.Repeat("░", width))
+// slots draws "done of total" as one cell per habit — ● checked, ○ still open —
+// so an empty day reads as six open slots instead of the solid gray block an
+// all-track bar (░░░░░░) turned into. Beyond maxSlots habits it falls back to
+// a ui.Bar.
+func slots(done, total int) string {
+	const maxSlots = 12
+	if total <= 0 {
+		return ""
 	}
-	filled := (done * width) / total
-	if filled > width {
-		filled = width
+	done = min(max(done, 0), total)
+	if total > maxSlots {
+		return ui.Bar(maxSlots, float64(done)/float64(total), false)
 	}
-	return styleOk.Render(strings.Repeat("█", filled)) + styleMuted.Render(strings.Repeat("░", width-filled))
+	return styleOkBold.Render(strings.Repeat("●", done)) + styleMuted.Render(strings.Repeat("○", total-done))
 }
 
 // dynamicPanel renders a panel with a custom border color.
@@ -256,7 +260,7 @@ func (m model) listHeader() string {
 	}
 	var mid string
 	if total > 0 {
-		mid = ui.Bar(6, float64(done)/float64(total), false) + styleMuted.Render(fmt.Sprintf(" %d/%d today · %d habits", done, total, total))
+		mid = slots(done, total) + styleMuted.Render(fmt.Sprintf(" %d/%d today · %d habits", done, total, total))
 		if best > 0 {
 			mid = styleOkBold.Render(fmt.Sprintf("🔥 %d", best)) + styleMuted.Render(" · ") + mid
 		}
@@ -320,7 +324,7 @@ func (m model) listLines(rowW int) []string {
 							}
 						}
 					}
-					minibar := ui.Bar(4, float64(gDone)/float64(max(gTotal, 1)), false)
+					minibar := slots(gDone, gTotal)
 					counter := minibar + styleMuted.Render(fmt.Sprintf(" %d/%d", gDone, gTotal))
 					ctrW := lipgloss.Width(counter)
 					groupNameW := innerW - ctrW - 1
