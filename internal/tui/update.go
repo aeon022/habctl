@@ -1455,9 +1455,10 @@ func (m model) handleConfirm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 func (m model) renderConfirm() string {
 	var b strings.Builder
+	b.WriteString(sectionHeader("Confirm") + "\n\n")
 	b.WriteString(styleWarn.Render("Delete?") + "\n\n")
-	b.WriteString("  " + m.confirmPrompt + "\n\n")
-	b.WriteString(styleMuted.Render("  y / enter  confirm      esc / n  cancel"))
+	b.WriteString(m.confirmPrompt + "\n\n")
+	b.WriteString(styleMuted.Render("y confirm · enter confirm · esc cancel"))
 	return m.panel(b.String())
 }
 

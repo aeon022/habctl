@@ -2,7 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"image/color"
 	"os"
 	"sort"
 	"strings"
@@ -19,6 +18,7 @@ import (
 	"github.com/aeon022/missionctl-core/overlay"
 	"github.com/aeon022/missionctl-core/statusbar"
 	"github.com/aeon022/missionctl-core/ui"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // ── view ──────────────────────────────────────────────────────────────────────
@@ -96,13 +96,51 @@ func (m model) viewContent() string {
 
 // ── layout helpers ────────────────────────────────────────────────────────────
 
-// panel wraps content in the shared panel style with a width that fills the terminal.
+// panel is the chrome shared by every non-list view: ui.Header + divider on
+// top (the leading "habctl · Section" line becomes the header), a one-line
+// statusbar footer (the trailing "a x · esc back" line becomes the hints) and
+// the body in between at constant height via ui.Frame.
 func (m model) panel(s string) string {
-	w := m.width - 2
-	if w < 62 {
-		w = 62
+	w := m.termWidth()
+	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
+	title := styleLime.Bold(true).Render("habctl")
+	if len(lines) > 0 && strings.HasPrefix(ansi.Strip(lines[0]), "habctl") {
+		title = lines[0]
+		lines = lines[1:]
 	}
-	return panelStyle.Width(w).Render(s)
+	var hints [][2]string
+	for len(lines) > 0 && strings.TrimSpace(ansi.Strip(lines[len(lines)-1])) == "" {
+		lines = lines[:len(lines)-1]
+	}
+	if n := len(lines); n > 0 {
+		if last := strings.TrimSpace(ansi.Strip(lines[n-1])); strings.Contains(last, "esc") {
+			for _, part := range strings.Split(last, " · ") {
+				k, d, _ := strings.Cut(strings.TrimSpace(part), " ")
+				h := [2]string{k, strings.TrimSpace(d)}
+				if k == "esc" { // first, so a narrow terminal drops it last
+					hints = append([][2]string{h}, hints...)
+				} else {
+					hints = append(hints, h)
+				}
+			}
+			lines = lines[:n-1]
+		}
+	}
+	if hints == nil {
+		hints = [][2]string{{"esc", "back"}}
+	}
+	for len(lines) > 0 && strings.TrimSpace(ansi.Strip(lines[0])) == "" {
+		lines = lines[1:]
+	}
+	for i, l := range lines {
+		lines[i] = "  " + ansi.Truncate(l, max(w-3, 1), "…")
+	}
+	head := ui.Header(w, "  "+title, "", styleMuted.Render(time.Now().Format("Mon 02 Jan"))+"  ") + "\n" + ui.Divider(w, "")
+	if m.height >= 30 {
+		head += "\n"
+	}
+	foot := "  " + statusbar.Hints(max(w-4, 10), hints...)
+	return ui.Frame(m.height, head, strings.Join(lines, "\n"), foot)
 }
 
 // innerWidth returns the usable text width inside the panel.
@@ -132,15 +170,6 @@ func slots(done, total int) string {
 		return ui.Bar(maxSlots, float64(done)/float64(total), false)
 	}
 	return styleOkBold.Render(strings.Repeat("●", done)) + styleMuted.Render(strings.Repeat("○", total-done))
-}
-
-// dynamicPanel renders a panel with a custom border color.
-func (m model) dynamicPanel(s string, bc color.Color) string {
-	w := m.width - 2
-	if w < 62 {
-		w = 62
-	}
-	return panelStyle.Width(w).BorderForeground(bc).Render(s)
 }
 
 // ── renderList ────────────────────────────────────────────────────────────────
@@ -735,7 +764,7 @@ func (m model) renderEditHabit() string {
 	if m.editFreq > 0 {
 		freqVal = fmt.Sprintf("%d× per week", m.editFreq)
 	}
-	b.WriteString(freqCursor + freqStyle.Render("Frequency:") + "  ")
+	b.WriteString(freqCursor + freqStyle.Render("Frequency:      ") + "  ")
 	if freqActive {
 		b.WriteString(styleFg.Bold(true).Render(freqVal) + "  " + styleMuted.Render("+/- to change"))
 	} else {
@@ -1419,7 +1448,6 @@ func (m model) helpContent() string {
 	}
 
 	var b strings.Builder
-	b.WriteString(sectionHeader("Help") + "\n\n")
 	b.WriteString(styleMuted.Render(
 		"  Track habits every day. Build streaks. Miss a day and\n" +
 			"  the streak resets — simple, honest accountability.\n",
@@ -1500,7 +1528,7 @@ func (m model) renderHelpPopup() string {
 		footer = fmt.Sprintf("j/k scroll (%d%%)  ·  %s", int(m.helpVP.ScrollPercent()*100), footer)
 	}
 	body := m.helpVP.View() + "\n" + styleMuted.Render(footer)
-	return panelStyle.Width(m.helpPopW).Render(body)
+	return ui.Panel(m.helpPopW, m.helpPopH, "Help", body, true)
 }
 
 // renderHabitHeatmap draws a month-labeled, weekday-rowed completion
