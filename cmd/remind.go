@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"github.com/aeon022/missionctl-core/applescript"
 	"os/exec"
 	"strings"
 
@@ -40,8 +41,8 @@ macOS notification. Ideal as a launchd job at 20:00.`,
 		title := fmt.Sprintf("%d habit(s) left today", len(pending))
 		body := strings.Join(pending, ", ")
 
-		script := fmt.Sprintf(`display notification %q with title %q`,
-			body, title)
+		script := fmt.Sprintf(`display notification "%s" with title "%s"`,
+			applescript.EscapeLine(body), applescript.EscapeLine(title))
 		out, err := exec.Command("osascript", "-e", script).CombinedOutput()
 		if err != nil {
 			// Not on macOS or osascript not available — fall back to terminal output.

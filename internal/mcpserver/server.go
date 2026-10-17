@@ -23,7 +23,7 @@ func Serve() error {
 	s.AddTool(toolListHabits(), handleListHabits)
 	s.AddTool(toolGetHabitStats(), handleGetHabitStats)
 	s.AddTool(toolAddHabit(), handleAddHabit)
-	s.AddTool(toolDeleteHabit(), handleDeleteHabit)
+	s.AddTool(toolDeleteHabit(), confirmed(handleDeleteHabit))
 	s.AddTool(toolStreakAtRisk(), handleStreakAtRisk)
 	s.AddTool(toolWeeklySummary(), handleWeeklySummary)
 	s.AddTool(toolSuggestHabits(), handleSuggestHabits)
@@ -68,6 +68,7 @@ func toolAddHabit() mcp.Tool {
 
 func toolDeleteHabit() mcp.Tool {
 	return mcp.NewTool("delete_habit",
+		confirmParam,
 		mcp.WithDescription("Delete a habit and all its check-in history. This is permanent — confirm with the user before calling."),
 		mcp.WithString("name", mcp.Required(), mcp.Description("Exact habit name to delete")),
 	)
