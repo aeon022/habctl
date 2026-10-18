@@ -32,7 +32,41 @@ func (m model) Init() tea.Cmd {
 	return tea.Batch(loadHabits(m.s, days), loadGroups(m.s), loadChains(m.s))
 }
 
+// Update scrolls tall non-list views (PgUp/PgDn/wheel) and resets that scroll whenever the view changes.
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.state != viewList {
+		step := 0
+		switch msg := msg.(type) {
+		case tea.KeyPressMsg:
+			switch msg.String() {
+			case "pgdown":
+				step = max(m.height-6, 3)
+			case "pgup":
+				step = -max(m.height-6, 3)
+			}
+		case tea.MouseWheelMsg:
+			switch msg.Button {
+			case tea.MouseWheelDown:
+				step = 3
+			case tea.MouseWheelUp:
+				step = -3
+			}
+		}
+		if step != 0 {
+			m.panelOff = max(m.panelOff+step, 0) // upper bound is clamped when drawing
+			return m, nil
+		}
+	}
+	prev := m.state
+	next, cmd := m.update(msg)
+	if nm, ok := next.(model); ok && nm.state != prev {
+		nm.panelOff = 0
+		next = nm
+	}
+	return next, cmd
+}
+
+func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 
 	case tea.WindowSizeMsg:

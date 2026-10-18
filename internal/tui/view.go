@@ -140,6 +140,12 @@ func (m model) panel(s string) string {
 	if m.height >= 30 {
 		head += "\n"
 	}
+	// A body taller than the terminal scrolls (PgUp/PgDn, wheel) instead of being cut off.
+	if room := m.height - strings.Count(head, "\n") - 2; m.height > 0 && len(lines) > room && room > 0 {
+		off := min(m.panelOff, len(lines)-room)
+		lines = lines[off : off+room]
+		hints = append(hints, [2]string{"pgup/pgdn", "scroll"})
+	}
 	foot := "  " + statusbar.Hints(max(w-4, 10), hints...)
 	return ui.Frame(m.height, head, strings.Join(lines, "\n"), foot)
 }

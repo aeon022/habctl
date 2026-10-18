@@ -170,6 +170,7 @@ type model struct {
 	input         textinput.Model
 	s             *store.Store
 	message       string
+	panelOff      int // scroll offset of the current non-list view (reset when the view changes)
 	isErr         bool
 	weekView      bool
 	height        int
