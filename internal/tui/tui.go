@@ -12,6 +12,7 @@ import (
 	"github.com/aeon022/habctl/internal/config"
 	"github.com/aeon022/habctl/internal/models"
 	"github.com/aeon022/habctl/internal/store"
+	"github.com/aeon022/missionctl-core/themepicker"
 	"github.com/aeon022/missionctl-core/uistate"
 )
 
@@ -170,7 +171,8 @@ type model struct {
 	input         textinput.Model
 	s             *store.Store
 	message       string
-	panelOff      int // scroll offset of the current non-list view (reset when the view changes)
+	themePicker   themepicker.Picker // the "T" popup
+	panelOff      int                // scroll offset of the current non-list view (reset when the view changes)
 	isErr         bool
 	weekView      bool
 	height        int

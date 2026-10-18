@@ -34,6 +34,13 @@ func (m model) Init() tea.Cmd {
 
 // Update scrolls tall non-list views (PgUp/PgDn/wheel) and resets that scroll whenever the view changes.
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if kp, ok := msg.(tea.KeyPressMsg); ok && m.themePicker.IsOpen() { // the "T" popup owns the keyboard while it is open
+		if text := m.themePicker.Key(kp.String()); text != "" {
+			m.message, m.isErr = text, false
+			return m, clearAfter()
+		}
+		return m, nil
+	}
 	if m.state != viewList {
 		step := 0
 		switch msg := msg.(type) {
@@ -660,14 +667,9 @@ func (m model) handleList(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.state = viewChainMgr
 		m.chainCursor = 0
 
-	case "T": // live theme switch; the choice is saved for every suite tool
-		name, err := theme.Cycle()
-		if err != nil {
-			m.message, m.isErr = "Theme: "+err.Error(), true
-		} else {
-			m.message, m.isErr = "Theme: "+name, false
-		}
-		return m, clearAfter()
+	case "T": // theme picker with live preview; the choice is saved for every suite tool
+		m.themePicker.Open()
+		return m, nil
 
 	case "t":
 		cal, err := m.s.GetCalendarData(52)
