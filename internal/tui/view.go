@@ -1487,7 +1487,7 @@ func (m model) helpContent() string {
 	b.WriteString(row("g", "goal → 3 linked habits (decompose)"))
 	b.WriteString(row("r", "AI weekly review — pattern coaching briefing"))
 	b.WriteString(row("t", "stats — heatmap & completion"))
-	b.WriteString(row("T", "next colour theme (saved for the whole suite)"))
+	b.WriteString(row("T", "colour theme picker with live preview (saved for the whole suite)"))
 	b.WriteString(row("c", "manage habit chains"))
 	b.WriteString(row("S", "settings — provider & API keys"))
 	b.WriteString(row("v", "compact/normal toggle (hide/show descriptions)"))

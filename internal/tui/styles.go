@@ -106,7 +106,7 @@ var paletteCommands = []paletteCommand{
 	{"note", "Add note to today's check-in", "N"},
 	{"window", "Toggle 7d / 30d streak window", "w"},
 	{"compact", "Compact/normal toggle", "v"},
-	{"theme", "Next colour theme (saved for the whole suite)", "T"},
+	{"theme", "Colour theme picker with live preview (saved for the whole suite)", "T"},
 	{"help", "Show help", "?"},
 	{"quit", "Quit habctl", "q"},
 }
