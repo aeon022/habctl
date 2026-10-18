@@ -17,6 +17,7 @@ import (
 	"github.com/aeon022/missionctl-core/emptystate"
 	"github.com/aeon022/missionctl-core/overlay"
 	"github.com/aeon022/missionctl-core/statusbar"
+	"github.com/aeon022/missionctl-core/theme"
 	"github.com/aeon022/missionctl-core/ui"
 	"github.com/charmbracelet/x/ansi"
 )
@@ -1345,7 +1346,8 @@ func (m model) renderSettings() string {
 		}
 		b.WriteString(cursor + label + "  " + badge + "\n")
 	}
-	b.WriteString("\n" + styleMuted.Render("enter configure · j/k navigate · esc back"))
+	b.WriteString("\n" + styleMuted.Render("Theme: ") + styleLime.Render(theme.Current()) + styleMuted.Render("  (t to switch)") + "\n")
+	b.WriteString("\n" + styleMuted.Render("enter configure · j/k navigate · t theme · esc back"))
 	return m.panel(b.String())
 }
 

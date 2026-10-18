@@ -1804,6 +1804,10 @@ func (m model) handleSettings(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case "esc", "q":
 		m.state = viewList
+	case "t":
+		if _, err := theme.Cycle(); err != nil {
+			m.message, m.isErr = "Theme: "+err.Error(), true
+		}
 	case "j", "down":
 		if m.settingsCursor < len(providers)-1 {
 			m.settingsCursor++

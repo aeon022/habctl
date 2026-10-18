@@ -34,3 +34,19 @@ func TestOnboardingChecklistListsFirstSteps(t *testing.T) {
 		t.Errorf("checklist missing steps:\n%s", c)
 	}
 }
+
+func TestSettingsThemeKeyCyclesAndShowsTheme(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	orig := theme.Current()
+	t.Cleanup(func() { _ = theme.Apply(orig) })
+
+	m := newTestModel()
+	m.state = viewSettings
+	mi, _ := m.handleSettings(tea.KeyPressMsg{Text: "t", Code: 't'})
+	if theme.Current() == orig {
+		t.Fatalf("t in settings must switch the theme, still %q", orig)
+	}
+	if out := mi.(model).renderSettings(); !strings.Contains(out, theme.Current()) {
+		t.Errorf("the settings screen should name the active theme:\n%s", out)
+	}
+}
