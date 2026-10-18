@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
+	"github.com/aeon022/missionctl-core/theme"
 )
 
 // ── colors ───────────────────────────────────────────────────────────────────
@@ -20,39 +21,41 @@ var Adaptive = func() func(light, dark string) color.Color {
 
 // ColorLime, ColorMuted, ColorOk and ColorFg are exported so the
 // non-interactive print commands in cmd/ (suggest, today, review) can reuse
-// this same Light/Dark palette instead of re-declaring their own copies.
+// the same palette instead of re-declaring their own copies. All of them
+// come from the shared theme and are rebuilt by refreshStyles on a switch.
 var (
-	ColorLime   = Adaptive("#65a30d", "#84cc16")
-	ColorMuted  = Adaptive("#64748b", "#718096")
-	ColorOk     = Adaptive("#16a34a", "#4ade80")
-	colorWarn   = Adaptive("#d97706", "#fbbf24")
-	colorDanger = Adaptive("#dc2626", "#f87171")
-	ColorFg     = Adaptive("#1e293b", "#e2e8f0")
-	colorBorder = Adaptive("#cbd5e1", "#1e1e2e")
-	colorGroup  = Adaptive("#0ea5e9", "#38bdf8")
-	// colorHover previews the row under the mouse before a click commits
-	// it as the selection. habctl doesn't use a background-fill selection
-	// style like the rest of the suite (its cursor row is marked by
-	// checkbox/name color alone) — hover follows that same convention
-	// with its own color, distinct from lime/ok/warn/group.
-	colorHover = Adaptive("#7c3aed", "#a78bfa")
+	ColorLime, ColorMuted, ColorOk, ColorFg                     color.Color
+	colorWarn, colorDanger, colorBorder, colorGroup, colorHover color.Color
 
-	styleLime   = lipgloss.NewStyle().Foreground(ColorLime)
-	styleMuted  = lipgloss.NewStyle().Foreground(ColorMuted)
-	styleOk     = lipgloss.NewStyle().Foreground(ColorOk)
+	styleLime, styleMuted, styleOk, styleOkBold, styleWarn, styleWarnBd, styleDanger, styleFg, styleGroup, styleHover, panelStyle lipgloss.Style
+)
+
+func init() {
+	refreshStyles()
+	theme.OnChange(refreshStyles)
+}
+
+// refreshStyles builds every cached colour and style from the active theme (live theme switching).
+// habctl's cursor row is marked by colour alone, so hover has its own hue (the theme blue).
+func refreshStyles() {
+	ColorLime, ColorMuted, ColorOk = theme.GreenV2, theme.MutedV2, theme.GreenV2
+	colorWarn, colorDanger, colorBorder, colorGroup, colorHover = theme.AmberV2, theme.RedV2, theme.SubtleV2, theme.BlueV2, theme.BlueV2
+	ColorFg = Adaptive("#1e293b", "#e2e8f0")
+
+	styleLime = lipgloss.NewStyle().Foreground(ColorLime)
+	styleMuted = lipgloss.NewStyle().Foreground(ColorMuted)
+	styleOk = lipgloss.NewStyle().Foreground(ColorOk)
 	styleOkBold = lipgloss.NewStyle().Foreground(ColorOk).Bold(true)
-	styleWarn   = lipgloss.NewStyle().Foreground(colorWarn)
+	styleWarn = lipgloss.NewStyle().Foreground(colorWarn)
 	styleWarnBd = lipgloss.NewStyle().Foreground(colorWarn).Bold(true)
 	styleDanger = lipgloss.NewStyle().Foreground(colorDanger)
-	styleFg     = lipgloss.NewStyle().Foreground(ColorFg)
-	styleGroup  = lipgloss.NewStyle().Foreground(colorGroup).Bold(true)
-	styleHover  = lipgloss.NewStyle().Foreground(colorHover)
+	styleFg = lipgloss.NewStyle().Foreground(ColorFg)
+	styleGroup = lipgloss.NewStyle().Foreground(colorGroup).Bold(true)
+	styleHover = lipgloss.NewStyle().Foreground(colorHover)
+	panelStyle = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colorBorder).Padding(1, 2)
+}
 
-	panelStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(colorBorder).
-			Padding(1, 2)
-
+var (
 	// heatColors is the 5-level completion shading shared by the global
 	// Stats heatmap and the per-habit detail heatmap, so both read as the
 	// same visual language rather than two slightly different scales.
@@ -103,6 +106,7 @@ var paletteCommands = []paletteCommand{
 	{"note", "Add note to today's check-in", "N"},
 	{"window", "Toggle 7d / 30d streak window", "w"},
 	{"compact", "Compact/normal toggle", "v"},
+	{"theme", "Next colour theme (saved for the whole suite)", "T"},
 	{"help", "Show help", "?"},
 	{"quit", "Quit habctl", "q"},
 }

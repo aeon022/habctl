@@ -310,7 +310,7 @@ func (m model) listLines(rowW int) []string {
 		if m.filterQ != "" || m.state == viewFilterInput {
 			es = emptystate.Render(0, 0, "", "No habits match the filter", "esc clears the filter")
 		} else {
-			es = emptystate.Render(0, 0, "", "No habits yet", "press n to add one")
+			es = emptystate.Render(0, 0, "", "Welcome to habctl", onboardingChecklist())
 		}
 		for _, l := range strings.Split(es, "\n") {
 			b.WriteString("  " + l + "\n")
@@ -1475,6 +1475,7 @@ func (m model) helpContent() string {
 	b.WriteString(row("g", "goal → 3 linked habits (decompose)"))
 	b.WriteString(row("r", "AI weekly review — pattern coaching briefing"))
 	b.WriteString(row("t", "stats — heatmap & completion"))
+	b.WriteString(row("T", "next colour theme (saved for the whole suite)"))
 	b.WriteString(row("c", "manage habit chains"))
 	b.WriteString(row("S", "settings — provider & API keys"))
 	b.WriteString(row("v", "compact/normal toggle (hide/show descriptions)"))
@@ -1925,4 +1926,14 @@ func (m model) renderChainPick() string {
 
 	b.WriteString("\n" + styleMuted.Render("enter select · esc back"))
 	return m.panel(b.String())
+}
+
+// onboardingChecklist is the first-run hint of an empty habit list: what to try first.
+func onboardingChecklist() string {
+	return strings.Join([]string{
+		"○  n   add your first habit",
+		"○  s   AI habit suggestions",
+		"○  :   open the command palette",
+		"○  T   pick a colour theme",
+	}, "\n")
 }

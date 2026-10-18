@@ -14,6 +14,7 @@ import (
 	"github.com/aeon022/habctl/internal/auth"
 	"github.com/aeon022/habctl/internal/config"
 	"github.com/aeon022/habctl/internal/models"
+	"github.com/aeon022/missionctl-core/theme"
 	"github.com/sahilm/fuzzy"
 )
 
@@ -624,6 +625,15 @@ func (m model) handleList(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "c":
 		m.state = viewChainMgr
 		m.chainCursor = 0
+
+	case "T": // live theme switch; the choice is saved for every suite tool
+		name, err := theme.Cycle()
+		if err != nil {
+			m.message, m.isErr = "Theme: "+err.Error(), true
+		} else {
+			m.message, m.isErr = "Theme: "+name, false
+		}
+		return m, clearAfter()
 
 	case "t":
 		cal, err := m.s.GetCalendarData(52)

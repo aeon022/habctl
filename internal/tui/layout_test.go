@@ -105,7 +105,7 @@ func TestMouseClickSelectsRowInNewGeometry(t *testing.T) {
 func TestEmptyListUsesEmptyState(t *testing.T) {
 	m := sized(t, 100, 24)
 	text := tuitest.Text(m)
-	if !strings.Contains(text, "No habits yet") || !strings.Contains(text, "press n to add one") {
+	if !strings.Contains(text, "Welcome to habctl") || !strings.Contains(text, "n   add your first habit") {
 		t.Errorf("empty state missing:\n%s", text)
 	}
 	if strings.Contains(text, "habits ·") {

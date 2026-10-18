@@ -78,6 +78,7 @@ habctl
 | `g` | Goal → 3 linked habits (decompose) |
 | `r` | AI weekly review — coaching briefing (missionctl Bundle) |
 | `t` | Stats — heatmap & completion |
+| `T` | Next colour theme — switches live and is saved for the whole suite |
 | `c` | Manage habit chains |
 | `S` | Settings — provider & API keys |
 | `v` / `w` | Compact toggle / 7d–30d streak window |
