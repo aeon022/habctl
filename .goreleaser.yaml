@@ -5,6 +5,7 @@ project_name: habctl
 before:
   hooks:
     - go mod tidy
+    - sh -c 'rm -rf completions && mkdir completions && for s in bash zsh fish; do go run . completion $s > completions/habctl.$s; done'
 
 builds:
   - main: .
@@ -23,6 +24,10 @@ builds:
 archives:
   - formats: [tar.gz]
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE*
+      - README*
+      - completions/*
 
 checksum:
   name_template: checksums.txt
@@ -48,5 +53,8 @@ brews:
     description: "Habit tracker for the terminal - streaks, AI coaching, MCP tools"
     install: |
       bin.install "habctl"
+      bash_completion.install "completions/habctl.bash" => "habctl"
+      zsh_completion.install "completions/habctl.zsh" => "_habctl"
+      fish_completion.install "completions/habctl.fish"
     test: |
       system "#{bin}/habctl", "version"
