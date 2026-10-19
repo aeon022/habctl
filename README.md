@@ -4,6 +4,16 @@ Terminal-first habit tracker. Part of the **missionctl** suite.
 
 Track daily habits, build streaks, get AI-powered suggestions and weekly coaching reviews — all from your terminal, stored locally in SQLite.
 
+![habctl demo](docs/demo.gif)
+
+**Install**
+
+```bash
+brew install aeon022/tap/habctl
+```
+
+Prebuilt binaries for macOS and Linux (arm64, amd64) are on the [Releases](https://github.com/aeon022/habctl/releases) page. Questions: see [SUPPORT.md](SUPPORT.md).
+
 ---
 
 ## Quick Start
