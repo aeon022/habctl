@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
 
 	"github.com/aeon022/habctl/internal/models"
 	"github.com/spf13/cobra"
@@ -22,6 +24,20 @@ var statsCmd = &cobra.Command{
 		allStats, err := s.GetAllStats(statsDays)
 		if err != nil {
 			return err
+		}
+
+		if asJSON, _ := cmd.Flags().GetBool("json"); asJSON {
+			type row struct {
+				Name      string `json:"name"`
+				Streak    int    `json:"streak"`
+				DaysDone  int    `json:"days_done"`
+				DaysTotal int    `json:"days_total"`
+			}
+			rows := make([]row, 0, len(allStats))
+			for _, st := range allStats {
+				rows = append(rows, row{st.Habit.Name, st.Streak, st.TotalDays, statsDays})
+			}
+			return json.NewEncoder(os.Stdout).Encode(map[string]any{"tool": "habctl", "command": "stats", "days": statsDays, "data": rows})
 		}
 
 		if len(allStats) == 0 {
@@ -47,4 +63,5 @@ var statsCmd = &cobra.Command{
 
 func init() {
 	statsCmd.Flags().IntVar(&statsDays, "days", 30, "Number of days to show stats for")
+	statsCmd.Flags().Bool("json", false, "Output as JSON")
 }

@@ -141,3 +141,27 @@ func TestCLIDeleteRequiresConfirmation(t *testing.T) {
 		t.Errorf("habit survived confirmed delete: %+v", j)
 	}
 }
+
+func TestStatsJSON(t *testing.T) {
+	isolateCLI(t)
+	if _, err := runCLI(t, "add", "Sport"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, "check", "Sport"); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runCLI(t, "stats", "--days", "7", "--json")
+	var got struct {
+		Days int `json:"days"`
+		Data []struct {
+			Name      string `json:"name"`
+			Streak    int    `json:"streak"`
+			DaysDone  int    `json:"days_done"`
+			DaysTotal int    `json:"days_total"`
+		}
+	}
+	if err != nil || json.Unmarshal([]byte(out), &got) != nil || got.Days != 7 || len(got.Data) != 1 || got.Data[0].Name != "Sport" || got.Data[0].DaysTotal != 7 {
+		t.Errorf("stats --json: %q %v", out, err)
+	}
+	runCLI(t, "stats", "--days", "7", "--json=false")
+}
