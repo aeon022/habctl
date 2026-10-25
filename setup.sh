@@ -40,3 +40,6 @@ else
   echo "  To enable MCP (Claude Code integration), add to ~/.claude.json:"
   echo "  \"mcpServers\": { \"habctl\": { \"command\": \"$HOME/.local/bin/habctl\", \"args\": [\"mcp\"] } }"
 fi
+
+# man pages (best effort): man habctl
+mkdir -p "$HOME/.local/share/man/man1" && "${INSTALL_DIR:-$HOME/.local/bin}/habctl" man "$HOME/.local/share/man/man1" >/dev/null 2>&1 || true
